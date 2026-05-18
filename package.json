@@ -1,6 +1,6 @@
 {
   "name": "spannora",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Self-hosted web chat for Claude Code (Agent SDK)",
   "type": "module",

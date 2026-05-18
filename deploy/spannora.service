@@ -23,6 +23,9 @@ Environment=SPANNORA_HOST=127.0.0.1
 Environment=SPANNORA_PORT=7878
 Environment=SPANNORA_DB=/var/lib/spannora/spannora.db
 Environment=IS_SANDBOX=1
+# Optional retention. Uncomment + tune to auto-prune old conversations
+# (deletes the matching ~/.claude/projects/.../<session-id>.jsonl too).
+# Environment=SPANNORA_RETENTION_DAYS=30
 
 # No User= → systemd defaults to root. This matches the typical
 # Claude-on-a-VM workflow: the SDK reuses /root/.claude/ for auth, and

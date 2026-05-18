@@ -11,6 +11,10 @@ export interface Conversation {
   sdk_session_id: string | null;
   created_at: number;
   last_used_at: number;
+  /** Input-context tokens from the most recent SDKResultMessage. */
+  last_context_tokens: number | null;
+  /** Model context window at the time of the last result (varies by model). */
+  last_context_window: number | null;
 }
 
 export interface Message {
@@ -98,9 +102,21 @@ function migrate(d: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_sessions_user
       ON sessions(user_id, last_used_at DESC);
   `);
+
+  // Idempotent column adds for upgrades from earlier schema. SQLite throws
+  // "duplicate column" on the second run — catch and ignore.
+  for (const stmt of [
+    "ALTER TABLE conversations ADD COLUMN last_context_tokens INTEGER",
+    "ALTER TABLE conversations ADD COLUMN last_context_window INTEGER",
+  ]) {
+    try { d.exec(stmt); } catch { /* column already exists */ }
+  }
 }
 
 // --- Conversations ---
+
+const CONV_COLUMNS = `id, title, cwd, sdk_session_id, created_at, last_used_at,
+  last_context_tokens, last_context_window`;
 
 export function createConversation(params: { cwd: string; title: string }): Conversation {
   const now = Date.now();
@@ -111,6 +127,8 @@ export function createConversation(params: { cwd: string; title: string }): Conv
     sdk_session_id: null,
     created_at: now,
     last_used_at: now,
+    last_context_tokens: null,
+    last_context_window: null,
   };
   openDb()
     .prepare(
@@ -123,37 +141,44 @@ export function createConversation(params: { cwd: string; title: string }): Conv
 
 export function listConversations(): Conversation[] {
   return openDb()
-    .prepare(
-      `SELECT id, title, cwd, sdk_session_id, created_at, last_used_at
-       FROM conversations
-       ORDER BY last_used_at DESC`,
-    )
+    .prepare(`SELECT ${CONV_COLUMNS} FROM conversations ORDER BY last_used_at DESC`)
     .all() as Conversation[];
 }
 
 export function getConversation(id: string): Conversation | null {
   const row = openDb()
-    .prepare(
-      `SELECT id, title, cwd, sdk_session_id, created_at, last_used_at
-       FROM conversations WHERE id = ?`,
-    )
+    .prepare(`SELECT ${CONV_COLUMNS} FROM conversations WHERE id = ?`)
     .get(id);
   return (row as Conversation | undefined) ?? null;
 }
 
 export function updateConversation(
   id: string,
-  patch: { title?: string; sdk_session_id?: string | null; last_used_at?: number },
+  patch: {
+    title?: string;
+    sdk_session_id?: string | null;
+    last_used_at?: number;
+    last_context_tokens?: number | null;
+    last_context_window?: number | null;
+  },
 ): void {
   const fields: string[] = [];
   const params: Record<string, unknown> = { id };
   if (patch.title !== undefined) { fields.push("title = @title"); params.title = patch.title; }
   if (patch.sdk_session_id !== undefined) { fields.push("sdk_session_id = @sdk_session_id"); params.sdk_session_id = patch.sdk_session_id; }
   if (patch.last_used_at !== undefined) { fields.push("last_used_at = @last_used_at"); params.last_used_at = patch.last_used_at; }
+  if (patch.last_context_tokens !== undefined) { fields.push("last_context_tokens = @last_context_tokens"); params.last_context_tokens = patch.last_context_tokens; }
+  if (patch.last_context_window !== undefined) { fields.push("last_context_window = @last_context_window"); params.last_context_window = patch.last_context_window; }
   if (!fields.length) return;
   openDb()
     .prepare(`UPDATE conversations SET ${fields.join(", ")} WHERE id = @id`)
     .run(params);
+}
+
+export function listOldConversations(cutoff: number): Conversation[] {
+  return openDb()
+    .prepare(`SELECT ${CONV_COLUMNS} FROM conversations WHERE last_used_at < ?`)
+    .all(cutoff) as Conversation[];
 }
 
 export function touchConversation(id: string): void {

@@ -177,6 +177,15 @@ function renderSidebar() {
     cwd.textContent = c.cwd;
     item.appendChild(cwd);
 
+    if (c.last_context_tokens && c.last_context_window) {
+      const pct = Math.round((c.last_context_tokens / c.last_context_window) * 100);
+      const ctx = document.createElement("div");
+      ctx.className = "ctx" + (pct >= 80 ? " hot" : pct >= 50 ? " warm" : "");
+      ctx.textContent = `${pct}% ctx`;
+      ctx.title = `${c.last_context_tokens.toLocaleString()} / ${c.last_context_window.toLocaleString()} input tokens`;
+      item.appendChild(ctx);
+    }
+
     const del = document.createElement("button");
     del.className = "del";
     del.type = "button";
@@ -1025,9 +1034,22 @@ function setSending(sending) {
   }
 }
 
+async function stopCurrentChat(conversationId) {
+  try {
+    await apiFetch(`/api/chat/${encodeURIComponent(conversationId)}/current`, {
+      method: "DELETE",
+    });
+  } catch (err) {
+    if (err.message !== "unauthorized") append("error", `Stop failed: ${err.message}`);
+  }
+}
+
 async function send() {
   if (state.sending) {
-    if (currentController) currentController.abort();
+    // Don't abort the fetch — that severs the SSE stream and we lose the
+    // partial response. Ask the server to cancel the query; it'll flush
+    // whatever it has so far and close the stream cleanly.
+    if (state.current) stopCurrentChat(state.current.id);
     return;
   }
   const effCwd = state.current?.cwd || state.pendingCwd;

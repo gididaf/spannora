@@ -28,6 +28,8 @@ import {
   readSession,
   type AuthedRequest,
 } from "./auth.js";
+import { log } from "./log.js";
+import { startRetention } from "./retention.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
@@ -103,6 +105,55 @@ function extractSessionId(msg: unknown): string | null {
   return null;
 }
 
+// Default fallback when the SDK doesn't surface contextWindow for some reason.
+const DEFAULT_CONTEXT_WINDOW =
+  Number(process.env.SPANNORA_CONTEXT_WINDOW) > 0
+    ? Number(process.env.SPANNORA_CONTEXT_WINDOW)
+    : 200_000;
+
+interface UsageExtract {
+  tokens: number;
+  window: number;
+}
+
+/**
+ * Pull the context-fill numbers out of an SDK result message.
+ *
+ * The "context fill" is the sum of input-side tokens the model saw on the
+ * last turn — `input_tokens + cache_read + cache_creation`. The denominator
+ * comes from `modelUsage[<largest>].contextWindow` (SDK reports per-model;
+ * we pick the highest in case multiple models served the turn).
+ */
+function extractUsage(msg: unknown): UsageExtract | null {
+  if (!msg || typeof msg !== "object") return null;
+  const m = msg as Record<string, unknown>;
+  if (m.type !== "result") return null;
+  const usage = m.usage as
+    | {
+        input_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      }
+    | undefined;
+  if (!usage) return null;
+  const tokens =
+    (usage.input_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0);
+  if (tokens <= 0) return null;
+
+  let window = DEFAULT_CONTEXT_WINDOW;
+  const modelUsage = m.modelUsage as Record<string, { contextWindow?: number }> | undefined;
+  if (modelUsage) {
+    for (const v of Object.values(modelUsage)) {
+      if (typeof v?.contextWindow === "number" && v.contextWindow > window) {
+        window = v.contextWindow;
+      }
+    }
+  }
+  return { tokens, window };
+}
+
 // --- /api/chat ---
 
 function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -172,7 +223,7 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
                 content_json: JSON.stringify(msg),
               });
             } catch (err) {
-              console.error("[spannora] failed to persist SDK message:", err);
+              log.error("failed to persist SDK message", { conversation_id, err });
             }
             // Capture the latest session_id whenever the SDK reports one
             // (init system message + every result; can change on fork).
@@ -180,6 +231,17 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
             if (sid && sid !== conv.sdk_session_id) {
               updateConversation(conversation_id, { sdk_session_id: sid });
               conv.sdk_session_id = sid;
+            }
+            // Result messages also carry input-context usage — persist it so
+            // the sidebar can show "X% ctx" without recomputing.
+            const usage = extractUsage(msg);
+            if (usage) {
+              updateConversation(conversation_id, {
+                last_context_tokens: usage.tokens,
+                last_context_window: usage.window,
+              });
+              conv.last_context_tokens = usage.tokens;
+              conv.last_context_window = usage.window;
             }
             writeSseEvent(res, "message", msg);
           },
@@ -208,6 +270,21 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
     .catch((err) => {
       sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
     });
+}
+
+// Cancel the in-flight query for a conversation. Returns 200 if a query
+// was actively cancelled, 204 if there was nothing in flight. Either way,
+// the client can stop waiting.
+function handleStopChat(res: http.ServerResponse, conversationId: string): void {
+  const active = activeQueries.get(conversationId);
+  if (!active) {
+    sendJson(res, 204, { ok: true, was_active: false });
+    return;
+  }
+  active.cancel();
+  activeQueries.delete(conversationId);
+  log.info("chat stopped via DELETE", { conversation_id: conversationId });
+  sendJson(res, 200, { ok: true, was_active: true });
 }
 
 // --- /api/conversations ---
@@ -408,6 +485,7 @@ function handleRevokeSession(res: http.ServerResponse, auth: AuthedRequest, sess
 
 const CONV_PATH_RE = /^\/api\/conversations(?:\/([^/]+))?$/;
 const SESSION_REVOKE_RE = /^\/api\/auth\/sessions\/([^/]+)$/;
+const CHAT_STOP_RE = /^\/api\/chat\/([^/]+)\/current$/;
 
 function isPublicPath(method: string | undefined, p: string): boolean {
   if (method === "GET" && (p === "/login" || p === "/setup")) return true;
@@ -461,6 +539,8 @@ const server = http.createServer((req, res) => {
   if (sm && req.method === "DELETE") return handleRevokeSession(res, auth, sm[1]);
 
   if (req.method === "POST" && url.pathname === "/api/chat") return handleChat(req, res);
+  const stopMatch = CHAT_STOP_RE.exec(url.pathname);
+  if (stopMatch && req.method === "DELETE") return handleStopChat(res, stopMatch[1]);
   if (req.method === "GET" && url.pathname === "/api/fs/list") return handleFsList(req, res, url);
   if (req.method === "POST" && url.pathname === "/api/fs/mkdir") return handleFsMkdir(req, res);
 
@@ -487,5 +567,7 @@ const server = http.createServer((req, res) => {
 initAuth();
 
 server.listen(PORT, HOST, () => {
-  console.log(`spannora listening on http://${HOST}:${PORT}`);
+  log.info("server listening", { host: HOST, port: PORT });
 });
+
+startRetention();

@@ -64,6 +64,9 @@ Open `http://localhost:7878`. The first visit redirects to `/setup`; the token i
 | `SPANNORA_PORT` | `7878` | TCP port |
 | `SPANNORA_DB` | `~/.spannora/spannora.db` | SQLite path (installer overrides to `/var/lib/spannora/spannora.db`) |
 | `SPANNORA_RESET` | unset | Set to `1` on startup to delete all users + sessions and regenerate the setup token |
+| `SPANNORA_RETENTION_DAYS` | unset | Auto-delete conversations untouched for more than N days. Also removes the matching `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. Sweep runs hourly. |
+| `SPANNORA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`. Logs are one JSON object per line — pipe through `jq` or `journalctl -o json`. |
+| `SPANNORA_CONTEXT_WINDOW` | `200000` | Fallback context-window denominator for the sidebar `% ctx` chip when the SDK doesn't surface `modelUsage[*].contextWindow`. |
 | `IS_SANDBOX` | unset | Set to `1` to opt into the SDK's "trusted" mode (installer sets this) |
 
 ### Installer

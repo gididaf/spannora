@@ -15,6 +15,7 @@ import {
   type User,
   type Session,
 } from "./db.js";
+import { log, banner } from "./log.js";
 
 const COOKIE_NAME = "spannora_session";
 const SESSION_IDLE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -25,25 +26,27 @@ export function initAuth(): { setupTokenIssued: boolean } {
   // Garbage-collect old sessions on startup.
   const cutoff = Date.now() - SESSION_IDLE_MS;
   const removed = deleteSessionsOlderThan(cutoff);
-  if (removed > 0) console.log(`[spannora] expired ${removed} idle session(s)`);
+  if (removed > 0) log.info("expired idle sessions", { count: removed });
 
   if (process.env.SPANNORA_RESET === "1") {
     deleteAllUsers();
-    console.warn("[spannora] SPANNORA_RESET=1 — all users and sessions deleted");
+    log.warn("SPANNORA_RESET=1 — all users and sessions deleted");
   }
 
   if (countUsers() === 0) {
     setupToken = randomBytes(24).toString("base64url");
-    console.log("");
-    console.log("┌─────────────────────────────────────────────────────────────────────┐");
-    console.log("│ spannora setup required.                                            │");
-    console.log("│ Open the app in a browser and use this one-time token to create     │");
-    console.log("│ your account:                                                       │");
-    console.log("│                                                                     │");
-    console.log(`│   ${setupToken}${" ".repeat(Math.max(0, 65 - setupToken.length))}│`);
-    console.log("│                                                                     │");
-    console.log("└─────────────────────────────────────────────────────────────────────┘");
-    console.log("");
+    banner([
+      "",
+      "┌─────────────────────────────────────────────────────────────────────┐",
+      "│ spannora setup required.                                            │",
+      "│ Open the app in a browser and use this one-time token to create     │",
+      "│ your account:                                                       │",
+      "│                                                                     │",
+      `│   ${setupToken}${" ".repeat(Math.max(0, 65 - setupToken.length))}│`,
+      "│                                                                     │",
+      "└─────────────────────────────────────────────────────────────────────┘",
+      "",
+    ]);
     return { setupTokenIssued: true };
   }
   return { setupTokenIssued: false };
