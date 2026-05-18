@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startChat, type ChatHandle } from "./chat.js";
+import { startChat, type ChatHandle, type AskUserAnswer } from "./chat.js";
 import { listDir, mkdirIn, validateCwd } from "./fs.js";
 import {
   createConversation,
@@ -47,8 +47,23 @@ const STATIC_TYPES: Record<string, string> = {
   ".json": "application/json",
 };
 
+type PendingResolver = (answer: AskUserAnswer) => void;
+
+interface ActiveEntry {
+  handle: ChatHandle;
+  // AskUserQuestion calls awaiting a browser POST, keyed by tool_use_id.
+  pending: Map<string, PendingResolver>;
+}
+
 // One in-flight query per conversation. Keyed by conversation_id.
-const activeQueries = new Map<string, ChatHandle>();
+const activeQueries = new Map<string, ActiveEntry>();
+
+function drainPending(entry: ActiveEntry, message: string): void {
+  for (const resolve of entry.pending.values()) {
+    resolve({ denied: true, message });
+  }
+  entry.pending.clear();
+}
 
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
   const relPath = urlPath === "/" ? "/index.html" : urlPath;
@@ -107,24 +122,26 @@ function extractSessionId(msg: unknown): string | null {
   return null;
 }
 
-// Default fallback when the SDK doesn't surface contextWindow for some reason.
-const DEFAULT_CONTEXT_WINDOW =
-  Number(process.env.SPANNORA_CONTEXT_WINDOW) > 0
-    ? Number(process.env.SPANNORA_CONTEXT_WINDOW)
-    : 200_000;
-
 interface UsageExtract {
   tokens: number;
   window: number;
 }
 
 /**
- * Pull the context-fill numbers out of an SDK result message.
+ * Pull context-used numbers out of an SDK result message, matching Claude
+ * Code's own status-line math (see sdk's bundled cli.js — functions Qo/OI for
+ * the numerator, _DA/bd for the denominator).
  *
- * The "context fill" is the sum of input-side tokens the model saw on the
- * last turn — `input_tokens + cache_read + cache_creation`. The denominator
- * comes from `modelUsage[<largest>].contextWindow` (SDK reports per-model;
- * we pick the highest in case multiple models served the turn).
+ * Numerator: input + cache_read + cache_creation + output, from the latest
+ * assistant turn's `usage`.
+ *
+ * Denominator: contextWindow(model) - maxOutputTokens(model). Both derived
+ * from the model id string; the SDK exposes `modelUsage[m].contextWindow`
+ * but Claude Code itself doesn't read it, so we don't either.
+ *
+ * `last_context_window` therefore stores the *usable* window (raw window
+ * minus the output reservation), so `tokens / window` is true "% used of
+ * usable context."
  */
 function extractUsage(msg: unknown): UsageExtract | null {
   if (!msg || typeof msg !== "object") return null;
@@ -135,25 +152,37 @@ function extractUsage(msg: unknown): UsageExtract | null {
         input_tokens?: number;
         cache_read_input_tokens?: number;
         cache_creation_input_tokens?: number;
+        output_tokens?: number;
       }
     | undefined;
   if (!usage) return null;
   const tokens =
     (usage.input_tokens ?? 0) +
     (usage.cache_read_input_tokens ?? 0) +
-    (usage.cache_creation_input_tokens ?? 0);
+    (usage.cache_creation_input_tokens ?? 0) +
+    (usage.output_tokens ?? 0);
   if (tokens <= 0) return null;
 
-  let window = DEFAULT_CONTEXT_WINDOW;
-  const modelUsage = m.modelUsage as Record<string, { contextWindow?: number }> | undefined;
-  if (modelUsage) {
-    for (const v of Object.values(modelUsage)) {
-      if (typeof v?.contextWindow === "number" && v.contextWindow > window) {
-        window = v.contextWindow;
-      }
-    }
-  }
+  const modelUsage = m.modelUsage as Record<string, unknown> | undefined;
+  const model = modelUsage ? Object.keys(modelUsage)[0] ?? "" : "";
+  const window = contextWindowFor(model) - maxOutputFor(model);
+  if (window <= 0) return null;
   return { tokens, window };
+}
+
+function contextWindowFor(model: string): number {
+  return model.includes("[1m]") ? 1_000_000 : 200_000;
+}
+
+function maxOutputFor(model: string): number {
+  if (model.includes("opus-4-5")) return 64_000;
+  if (model.includes("opus-4")) return 32_000;
+  if (model.includes("sonnet-4") || model.includes("haiku-4")) return 64_000;
+  if (model.includes("3-5")) return 8_192;
+  if (model.includes("claude-3-opus")) return 4_096;
+  if (model.includes("claude-3-sonnet")) return 8_192;
+  if (model.includes("claude-3-haiku")) return 4_096;
+  return 32_000;
 }
 
 // --- /api/chat ---
@@ -209,11 +238,20 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
       });
       res.write(": stream-open\n\n");
 
+      const pending = new Map<string, PendingResolver>();
+
       const handle = startChat(
         {
           prompt,
           cwd: conv.cwd,
           resumeSessionId: conv.sdk_session_id ?? null,
+          requestUserAnswer: (toolUseId, _input) =>
+            new Promise<AskUserAnswer>((resolve) => {
+              pending.set(toolUseId, (answer) => {
+                pending.delete(toolUseId);
+                resolve(answer);
+              });
+            }),
         },
         {
           onMessage: (msg) => {
@@ -252,6 +290,8 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
               message: err instanceof Error ? err.message : String(err),
             }),
           onEnd: () => {
+            const entry = activeQueries.get(conversation_id);
+            if (entry) drainPending(entry, "Stream ended.");
             activeQueries.delete(conversation_id);
             touchConversation(conversation_id);
             writeSseEvent(res, "end", {});
@@ -260,9 +300,11 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
         },
       );
 
-      activeQueries.set(conversation_id, handle);
+      activeQueries.set(conversation_id, { handle, pending });
 
       const cancelOnClose = () => {
+        const entry = activeQueries.get(conversation_id);
+        if (entry) drainPending(entry, "Stream closed.");
         handle.cancel();
         activeQueries.delete(conversation_id);
       };
@@ -283,10 +325,45 @@ function handleStopChat(res: http.ServerResponse, conversationId: string): void 
     sendJson(res, 204, { ok: true, was_active: false });
     return;
   }
-  active.cancel();
+  drainPending(active, "User stopped the turn.");
+  active.handle.cancel();
   activeQueries.delete(conversationId);
   log.info("chat stopped via DELETE", { conversation_id: conversationId });
   sendJson(res, 200, { ok: true, was_active: true });
+}
+
+// Resolve an AskUserQuestion that the SDK is currently paused on. Body:
+// { tool_use_id: string, answers: Record<string,string> }. 204 on success,
+// 404 if no matching pending resolver exists (covers reload / double-submit).
+function handleAnswerChat(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  conversationId: string,
+): void {
+  readJsonBody(req)
+    .then((body) => {
+      const { tool_use_id, answers } = (body ?? {}) as {
+        tool_use_id?: string;
+        answers?: Record<string, string>;
+      };
+      if (typeof tool_use_id !== "string" || !tool_use_id) {
+        sendJson(res, 400, { error: "tool_use_id is required" });
+        return;
+      }
+      if (!answers || typeof answers !== "object") {
+        sendJson(res, 400, { error: "answers object is required" });
+        return;
+      }
+      const entry = activeQueries.get(conversationId);
+      const resolver = entry?.pending.get(tool_use_id);
+      if (!entry || !resolver) {
+        sendJson(res, 404, { error: "no pending question for that tool_use_id" });
+        return;
+      }
+      resolver({ answers });
+      sendJson(res, 200, { ok: true });
+    })
+    .catch((err) => sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) }));
 }
 
 // --- /api/conversations ---
@@ -356,7 +433,8 @@ function handleDeleteConversation(res: http.ServerResponse, id: string): void {
   // Cancel any in-flight query for this conversation before deleting.
   const active = activeQueries.get(id);
   if (active) {
-    active.cancel();
+    drainPending(active, "Conversation deleted.");
+    active.handle.cancel();
     activeQueries.delete(id);
   }
   deleteConversation(id);
@@ -488,6 +566,7 @@ function handleRevokeSession(res: http.ServerResponse, auth: AuthedRequest, sess
 const CONV_PATH_RE = /^\/api\/conversations(?:\/([^/]+))?$/;
 const SESSION_REVOKE_RE = /^\/api\/auth\/sessions\/([^/]+)$/;
 const CHAT_STOP_RE = /^\/api\/chat\/([^/]+)\/current$/;
+const CHAT_ANSWER_RE = /^\/api\/chat\/([^/]+)\/answer$/;
 
 function isPublicPath(method: string | undefined, p: string): boolean {
   if (method === "GET" && (p === "/login" || p === "/setup")) return true;
@@ -549,6 +628,8 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && url.pathname === "/api/chat") return handleChat(req, res);
   const stopMatch = CHAT_STOP_RE.exec(url.pathname);
   if (stopMatch && req.method === "DELETE") return handleStopChat(res, stopMatch[1]);
+  const answerMatch = CHAT_ANSWER_RE.exec(url.pathname);
+  if (answerMatch && req.method === "POST") return handleAnswerChat(req, res, answerMatch[1]);
   if (req.method === "GET" && url.pathname === "/api/fs/list") return handleFsList(req, res, url);
   if (req.method === "POST" && url.pathname === "/api/fs/mkdir") return handleFsMkdir(req, res);
 

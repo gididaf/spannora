@@ -1,11 +1,30 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 
+export interface AskUserQuestionInput {
+  questions: Array<{
+    question: string;
+    header: string;
+    multiSelect?: boolean;
+    options: Array<{ label: string; description: string }>;
+  }>;
+}
+
+export type AskUserAnswer =
+  | { answers: Record<string, string> }
+  | { denied: true; message: string };
+
 export interface ChatParams {
   prompt: string;
   cwd: string;
   /** SDK session id from a prior turn — passed as `options.resume`. */
   resumeSessionId?: string | null;
+  /**
+   * Invoked when the model calls AskUserQuestion. The host resolves with the
+   * collected answers (keyed by question text) or denies with a message. The
+   * SDK pauses tool execution until this returns.
+   */
+  requestUserAnswer?: (toolUseId: string, input: AskUserQuestionInput) => Promise<AskUserAnswer>;
 }
 
 export interface ChatStreamHandlers {
@@ -28,6 +47,10 @@ export function startChat(params: ChatParams, handlers: ChatStreamHandlers): Cha
         prompt: params.prompt,
         options: {
           cwd: params.cwd,
+          // The `[1m]` suffix routes to the 1M context variant — the SDK's
+          // status-line code triggers off this substring (cli.js R$). Override
+          // with SPANNORA_MODEL if you want a different model.
+          model: process.env.SPANNORA_MODEL || "claude-opus-4-7[1m]",
           permissionMode: "bypassPermissions",
           allowDangerouslySkipPermissions: true,
           env: { ...process.env, IS_SANDBOX: "1" },
@@ -36,6 +59,30 @@ export function startChat(params: ChatParams, handlers: ChatStreamHandlers): Cha
           // the SDK uses a minimal prompt and the model hallucinates paths
           // because it doesn't know the cwd.
           systemPrompt: { type: "preset", preset: "claude_code" },
+          // Under bypassPermissions, only tools that flag
+          // `requiresUserInteraction` (currently AskUserQuestion and
+          // ExitPlanMode) actually reach canUseTool — everything else is
+          // auto-approved by the mode shortcut in the SDK. Route the
+          // interactive ones to the host; pass-through anything else.
+          canUseTool: async (toolName, input, opts) => {
+            if (toolName !== "AskUserQuestion" || !params.requestUserAnswer) {
+              return { behavior: "allow", updatedInput: input };
+            }
+            const result = await params.requestUserAnswer(
+              opts.toolUseID,
+              input as unknown as AskUserQuestionInput,
+            );
+            if ("denied" in result) {
+              return { behavior: "deny", message: result.message };
+            }
+            return {
+              behavior: "allow",
+              updatedInput: {
+                questions: (input as { questions: unknown }).questions,
+                answers: result.answers,
+              },
+            };
+          },
           ...(params.resumeSessionId ? { resume: params.resumeSessionId } : {}),
         },
       });

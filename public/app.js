@@ -46,6 +46,10 @@ function saveLastCwd(p) { try { localStorage.setItem(LAST_CWD_KEY, p); } catch {
 
 let currentController = null;
 const toolCards = new Map();
+// tool_use_ids of AskUserQuestion cards whose form is still open
+// (not yet answered, denied, or aborted). While non-empty, the main
+// prompt textarea is locked so the user can only interact with the form.
+const openAsks = new Set();
 
 // === Picker modal refs ===
 const pickerEl = document.getElementById("picker");
@@ -182,7 +186,7 @@ function renderSidebar() {
       const ctx = document.createElement("div");
       ctx.className = "ctx" + (pct >= 80 ? " hot" : pct >= 50 ? " warm" : "");
       ctx.textContent = `${pct}% ctx`;
-      ctx.title = `${c.last_context_tokens.toLocaleString()} / ${c.last_context_window.toLocaleString()} input tokens`;
+      ctx.title = `${c.last_context_tokens.toLocaleString()} / ${c.last_context_window.toLocaleString()} tokens used (incl. cache + output)`;
       item.appendChild(ctx);
     }
 
@@ -426,10 +430,23 @@ function renderCwd() {
     : "Choose working directory";
 
   // Prompt + Send are disabled until a project (cwd) is selected.
-  const hasCwd = !!cwd;
-  promptInput.disabled = !hasCwd;
-  sendBtn.disabled = !hasCwd;
-  promptInput.placeholder = hasCwd
+  sendBtn.disabled = !cwd;
+  applyPromptState();
+}
+
+// Centralizes the prompt textarea's disabled+placeholder state. Two
+// reasons to lock it: no cwd selected yet, or an AskUserQuestion form
+// is open and awaiting an answer. Send stays available so the user
+// can still hit Stop to abort the turn.
+function applyPromptState() {
+  const cwd = state.current?.cwd || state.pendingCwd;
+  if (openAsks.size > 0) {
+    promptInput.disabled = true;
+    promptInput.placeholder = "Answer the question above to continue…";
+    return;
+  }
+  promptInput.disabled = !cwd;
+  promptInput.placeholder = cwd
     ? "Ask Claude Code… (⌘/Ctrl+Enter to send)"
     : "Choose a working directory to start…";
 }
@@ -525,6 +542,8 @@ function escapeHtml(s) {
 function clearTranscript() {
   transcript.innerHTML = "";
   toolCards.clear();
+  openAsks.clear();
+  applyPromptState();
 }
 
 function append(cls, text) {
@@ -856,6 +875,52 @@ function renderGrep(input, content, isError) {
   return wrap;
 }
 
+function renderAskUserQuestion(input, content, isError) {
+  const wrap = document.createElement("div");
+  wrap.className = "render-aq";
+
+  // The questions are on the original tool_use input. The answers ride
+  // back inside the tool_result content as a flat string the SDK builds
+  // in mapToolResultToToolResultBlockParam:
+  //   `User has answered your questions: "Q1"="A1", "Q2"="A2". You can now…`
+  // Parse "X"="Y" pairs out of it.
+  let answers = {};
+  const questions = Array.isArray(input?.questions) ? input.questions : [];
+  const raw = stringifyContent(content);
+  const re = /"((?:[^"\\]|\\.)*)"=\s*"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    answers[m[1]] = m[2];
+  }
+  // The assistant input may also carry answers directly (e.g. if a future
+  // SDK echoes them there). Prefer those if present.
+  if (input && typeof input === "object" && input.answers && typeof input.answers === "object") {
+    answers = input.answers;
+  }
+
+  for (const q of questions) {
+    const qWrap = document.createElement("div");
+    qWrap.className = "aq-result-q";
+    const head = document.createElement("div");
+    head.className = "aq-result-head";
+    const chip = document.createElement("span");
+    chip.className = "aq-chip";
+    chip.textContent = q.header || "Q";
+    const title = document.createElement("span");
+    title.className = "aq-result-title";
+    title.textContent = q.question || "";
+    head.append(chip, title);
+    qWrap.appendChild(head);
+    const ans = document.createElement("div");
+    ans.className = "aq-result-answer";
+    ans.textContent = answers[q.question] ?? "(no answer)";
+    qWrap.appendChild(ans);
+    wrap.appendChild(qWrap);
+  }
+  if (isError) wrap.appendChild(errorPane(content));
+  return wrap;
+}
+
 const renderers = {
   Edit: renderEdit,
   MultiEdit: renderMultiEdit,
@@ -864,6 +929,7 @@ const renderers = {
   Read: renderRead,
   Glob: renderGlob,
   Grep: renderGrep,
+  AskUserQuestion: renderAskUserQuestion,
 };
 
 function renderToolBody(name, input, content, isError) {
@@ -907,6 +973,8 @@ function rawToggle(input, content, isError) {
 function makeToolCard(block) {
   const card = document.createElement("details");
   card.className = "tool-card";
+  // Auto-expand AskUserQuestion so the form is visible without a click.
+  if (block.name === "AskUserQuestion") card.open = true;
 
   const header = document.createElement("summary");
   header.className = "tool-header";
@@ -921,7 +989,9 @@ function makeToolCard(block) {
 
   const summaryEl = document.createElement("span");
   summaryEl.className = "tool-summary";
-  summaryEl.textContent = summarizeToolInput(block.input);
+  summaryEl.textContent = block.name === "AskUserQuestion"
+    ? `${(block.input?.questions ?? []).length} question${(block.input?.questions ?? []).length === 1 ? "" : "s"}`
+    : summarizeToolInput(block.input);
 
   const statusEl = document.createElement("span");
   statusEl.className = "tool-status pending";
@@ -932,10 +1002,14 @@ function makeToolCard(block) {
 
   const body = document.createElement("div");
   body.className = "tool-body";
-  const waiting = document.createElement("div");
-  waiting.className = "tool-waiting";
-  waiting.textContent = "(waiting for result…)";
-  body.appendChild(waiting);
+  if (block.name === "AskUserQuestion" && block.id) {
+    body.appendChild(makeAskQuestionForm(block.id, block.input || {}));
+  } else {
+    const waiting = document.createElement("div");
+    waiting.className = "tool-waiting";
+    waiting.textContent = "(waiting for result…)";
+    body.appendChild(waiting);
+  }
   card.appendChild(body);
 
   if (block.id) toolCards.set(block.id, {
@@ -946,9 +1020,223 @@ function makeToolCard(block) {
   return card;
 }
 
+function makeAskQuestionForm(toolUseId, input) {
+  const form = document.createElement("div");
+  form.className = "aq-form";
+
+  openAsks.add(toolUseId);
+  applyPromptState();
+
+  const questions = Array.isArray(input.questions) ? input.questions : [];
+  // Per-question selection state. For single-select we track an index;
+  // for multi-select we track a Set of indices. Free-text "Other" is
+  // tracked separately and always allowed (the SDK doesn't include an
+  // "Other" option in `options` — it expects the host to add one).
+  const qState = questions.map((q) => ({
+    selectedIdx: null,         // single-select: index of picked option
+    selectedIdxs: new Set(),   // multi-select: indices of picked options
+    otherSelected: false,      // is the "Other" radio/checkbox checked?
+    otherText: "",
+    multi: !!q.multiSelect,
+  }));
+
+  questions.forEach((q, qi) => {
+    const qWrap = document.createElement("div");
+    qWrap.className = "aq-question";
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "aq-question-header";
+    const chip = document.createElement("span");
+    chip.className = "aq-chip";
+    chip.textContent = q.header || `Q${qi + 1}`;
+    if (q.multiSelect) {
+      const multi = document.createElement("span");
+      multi.className = "aq-multi-hint";
+      multi.textContent = "multi-select";
+      headerRow.append(chip, multi);
+    } else {
+      headerRow.appendChild(chip);
+    }
+    qWrap.appendChild(headerRow);
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "aq-title";
+    titleEl.textContent = q.question || "";
+    qWrap.appendChild(titleEl);
+
+    const groupName = `aq-${toolUseId}-${qi}`;
+    let otherCheck;  // declared early so option handlers can clear it
+
+    const opts = Array.isArray(q.options) ? q.options : [];
+    opts.forEach((opt, oi) => {
+      const row = document.createElement("label");
+      row.className = "aq-option";
+      const inp = document.createElement("input");
+      inp.type = q.multiSelect ? "checkbox" : "radio";
+      inp.name = groupName;
+      inp.value = String(oi);
+      inp.addEventListener("change", () => {
+        if (q.multiSelect) {
+          if (inp.checked) qState[qi].selectedIdxs.add(oi);
+          else qState[qi].selectedIdxs.delete(oi);
+        } else {
+          qState[qi].selectedIdx = oi;
+          // Browser already unchecked the Other radio in the same group;
+          // mirror that in state.
+          qState[qi].otherSelected = false;
+        }
+      });
+      const txt = document.createElement("span");
+      txt.className = "aq-option-text";
+      const label = document.createElement("span");
+      label.className = "aq-option-label";
+      label.textContent = opt.label || "";
+      txt.appendChild(label);
+      if (opt.description) {
+        const desc = document.createElement("span");
+        desc.className = "aq-option-desc";
+        desc.textContent = opt.description;
+        txt.appendChild(desc);
+      }
+      row.append(inp, txt);
+      qWrap.appendChild(row);
+    });
+
+    // "Other" — rendered as one more option row. Per the SDK schema:
+    // "There should be no 'Other' option, that will be provided automatically."
+    // Not wrapped in <label> because the text input lives inside it and we
+    // don't want clicks/keystrokes there to toggle the radio.
+    const otherRow = document.createElement("div");
+    otherRow.className = "aq-option aq-option-other";
+    otherCheck = document.createElement("input");
+    otherCheck.type = q.multiSelect ? "checkbox" : "radio";
+    otherCheck.name = groupName;
+    otherCheck.value = "__other__";
+    otherCheck.addEventListener("change", () => {
+      qState[qi].otherSelected = otherCheck.checked;
+      if (!q.multiSelect && otherCheck.checked) {
+        // Browser already unchecked the option radio; mirror that in state.
+        qState[qi].selectedIdx = null;
+      }
+    });
+    const otherInput = document.createElement("input");
+    otherInput.type = "text";
+    otherInput.className = "aq-other-input";
+    otherInput.placeholder = q.multiSelect ? "Other (will be added)" : "Other answer";
+    otherInput.addEventListener("input", () => {
+      qState[qi].otherText = otherInput.value;
+      // Auto-select Other when the user starts typing. For single-select,
+      // assigning .checked = true also unchecks the previously-picked
+      // option radio (browser maintains the radio-group invariant).
+      if (otherInput.value && !otherCheck.checked) {
+        otherCheck.checked = true;
+        qState[qi].otherSelected = true;
+        if (!q.multiSelect) qState[qi].selectedIdx = null;
+      }
+    });
+    otherRow.append(otherCheck, otherInput);
+    qWrap.appendChild(otherRow);
+
+    form.appendChild(qWrap);
+  });
+
+  const footer = document.createElement("div");
+  footer.className = "aq-footer";
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "aq-submit";
+  submit.textContent = "Submit";
+  const msg = document.createElement("span");
+  msg.className = "aq-msg";
+  footer.append(submit, msg);
+  form.appendChild(footer);
+
+  submit.addEventListener("click", async () => {
+    const answers = {};
+    for (let qi = 0; qi < questions.length; qi++) {
+      const q = questions[qi];
+      const s = qState[qi];
+      const opts = Array.isArray(q.options) ? q.options : [];
+      const other = s.otherText.trim();
+      const label = `"${q.header || `Q${qi + 1}`}"`;
+      if (q.multiSelect) {
+        const picked = [...s.selectedIdxs].map((i) => opts[i]?.label).filter(Boolean);
+        if (s.otherSelected) {
+          if (!other) {
+            msg.textContent = `Please type your Other answer for ${label}.`;
+            return;
+          }
+          picked.push(other);
+        }
+        if (picked.length === 0) {
+          msg.textContent = `Please answer ${label}.`;
+          return;
+        }
+        answers[q.question] = picked.join(", ");
+      } else {
+        if (s.otherSelected) {
+          if (!other) {
+            msg.textContent = `Please type your Other answer for ${label}.`;
+            return;
+          }
+          answers[q.question] = other;
+        } else if (s.selectedIdx != null) {
+          answers[q.question] = opts[s.selectedIdx]?.label || "";
+        } else {
+          msg.textContent = `Please answer ${label}.`;
+          return;
+        }
+      }
+    }
+
+    submit.disabled = true;
+    submit.textContent = "Submitting…";
+    msg.textContent = "";
+    try {
+      const convId = state.current?.id;
+      if (!convId) throw new Error("No active conversation.");
+      const res = await apiFetch(
+        `/api/chat/${encodeURIComponent(convId)}/answer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool_use_id: toolUseId, answers }),
+        },
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+      // Lock the form. The inbound tool_result will replace this body
+      // with a summary via setToolResult anyway, but if that's slow the
+      // user shouldn't be able to re-submit.
+      form.querySelectorAll("input").forEach((el) => { el.disabled = true; });
+      submit.textContent = "Submitted";
+      // setToolResult will also drop this id when the tool_result
+      // arrives, but unlocking the prompt as soon as we know the
+      // resolver fired feels snappier.
+      openAsks.delete(toolUseId);
+      applyPromptState();
+    } catch (err) {
+      if (err.message === "unauthorized") return;
+      msg.textContent = `Failed: ${err.message}`;
+      submit.disabled = false;
+      submit.textContent = "Submit";
+      // The question is dead (404 / network) — let the user type again.
+      openAsks.delete(toolUseId);
+      applyPromptState();
+    }
+  });
+
+  return form;
+}
+
 function setToolResult(toolUseId, content, isError) {
   const entry = toolCards.get(toolUseId);
   if (!entry) return;
+  // AskUserQuestion result arriving → unlock the prompt if it was the
+  // last open one. Covers Stop-aborts-turn and normal-completion paths.
+  if (openAsks.delete(toolUseId)) applyPromptState();
 
   const body = renderToolBody(entry.name, entry.input, content, isError)
     || renderGeneric(entry.input, content, isError);
@@ -1008,8 +1296,49 @@ function renderResult(msg) {
   const parts = [];
   parts.push(ok ? "✓ done" : `✗ ${msg.subtype ?? "error"}`);
   if (typeof msg.duration_ms === "number") parts.push(`${(msg.duration_ms / 1000).toFixed(1)}s`);
-  if (typeof msg.total_cost_usd === "number") parts.push(`$${msg.total_cost_usd.toFixed(4)}`);
+  const pct = ctxUsedPct(msg);
+  if (pct !== null) parts.push(`${pct}% ctx`);
   appendNode(makeTextBubble("system", parts.join(" · ")));
+}
+
+// Mirrors Claude Code's status-line math (see sdk.cli.js Qo/OI/_DA/bd):
+//   numerator = input + cache_read + cache_creation + output  (latest assistant turn)
+//   denominator = contextWindow(model) - maxOutputTokens(model)
+// Both derived from the model id substring; the SDK's modelUsage.contextWindow
+// is ignored because it isn't what Claude Code itself reads.
+function ctxUsedPct(msg) {
+  const u = msg?.usage;
+  if (!u) return null;
+  const num =
+    (u.input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    (u.output_tokens ?? 0);
+  if (num <= 0) return null;
+  const model = pickModelId(msg);
+  const denom = contextWindowFor(model) - maxOutputFor(model);
+  if (denom <= 0) return null;
+  return Math.round((num / denom) * 100);
+}
+
+function pickModelId(msg) {
+  const keys = msg?.modelUsage ? Object.keys(msg.modelUsage) : [];
+  return keys[0] || "";
+}
+
+function contextWindowFor(model) {
+  return model.includes("[1m]") ? 1_000_000 : 200_000;
+}
+
+function maxOutputFor(model) {
+  if (model.includes("opus-4-5")) return 64_000;
+  if (model.includes("opus-4")) return 32_000;
+  if (model.includes("sonnet-4") || model.includes("haiku-4")) return 64_000;
+  if (model.includes("3-5")) return 8_192;
+  if (model.includes("claude-3-opus")) return 4_096;
+  if (model.includes("claude-3-sonnet")) return 8_192;
+  if (model.includes("claude-3-haiku")) return 4_096;
+  return 32_000;
 }
 
 function renderSdkMessage(msg) {
@@ -1126,6 +1455,12 @@ async function send() {
     currentController = null;
     state.sending = false;
     setSending(false);
+    // Stream is done. If a question was open (e.g. turn aborted before
+    // a tool_result arrived), unlock the prompt so the user can move on.
+    if (openAsks.size > 0) {
+      openAsks.clear();
+      applyPromptState();
+    }
     refreshSidebar();
   }
 }
