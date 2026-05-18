@@ -17,25 +17,16 @@ curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | 
 The script:
 
 - installs Node 20+ if missing (via NodeSource)
-- creates a dedicated `spannora` system user with a home dir
-- downloads the latest release tarball from GitHub
-- extracts to `/opt/spannora`, runs `npm install --omit=dev`
-- installs and starts a systemd unit (listens on `127.0.0.1:7878`)
-- prints the Caddyfile snippet for you to paste
+- downloads the latest release tarball, extracts to `/opt/spannora`, `npm install --omit=dev`
+- installs and starts a systemd unit running as **root** (so the SDK reuses `/root/.claude/` — wherever you already log `claude` in on your VMs, spannora picks it up)
+- detects the public IP and **auto-installs Caddy with a Let's Encrypt cert for `<ip>.sslip.io`** by default
+- prints the URL and one-time setup token
 
 Re-running it upgrades in place. Existing SQLite data and Claude Code auth are preserved.
 
-Then put a TLS terminator in front:
+**Override the auto-domain** by setting `SPANNORA_DOMAIN=your.domain` before running the installer. **Skip the proxy entirely** with `SPANNORA_NO_PROXY=1`.
 
-```caddy
-chat.yourdomain.com {
-    reverse_proxy 127.0.0.1:7878 {
-        transport http { read_timeout 1h }
-    }
-}
-```
-
-Reload Caddy, visit `https://chat.yourdomain.com`. The first hit redirects to `/setup`; the one-time token is in `journalctl -u spannora`.
+> ⚠️ Running as root means tool calls (Bash, Edit, Write…) have full root access on the host. That's the point for the "control my VM from my phone" workflow, but a careless prompt can do real damage. Treat the web UI like a root shell.
 
 Full step-by-step (no installer) lives in [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
@@ -65,6 +56,8 @@ Open `http://localhost:7878`. The first visit redirects to `/setup`; the token i
 
 ## Environment variables
 
+### spannora runtime
+
 | Var | Default | Notes |
 |---|---|---|
 | `SPANNORA_HOST` | `127.0.0.1` | Bind address |
@@ -72,6 +65,13 @@ Open `http://localhost:7878`. The first visit redirects to `/setup`; the token i
 | `SPANNORA_DB` | `~/.spannora/spannora.db` | SQLite path (installer overrides to `/var/lib/spannora/spannora.db`) |
 | `SPANNORA_RESET` | unset | Set to `1` on startup to delete all users + sessions and regenerate the setup token |
 | `IS_SANDBOX` | unset | Set to `1` to opt into the SDK's "trusted" mode (installer sets this) |
+
+### Installer
+
+| Var | Default | Notes |
+|---|---|---|
+| `SPANNORA_DOMAIN` | `<public-ip>.sslip.io` | Hostname Caddy serves. Override with a real domain you own. |
+| `SPANNORA_NO_PROXY` | unset | Set to `1` to skip Caddy install/config entirely — bring your own proxy. |
 
 ## License
 

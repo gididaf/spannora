@@ -5,14 +5,19 @@
 # Claude Code auth across upgrades.
 #
 #   curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
+#
+# Environment overrides:
+#   SPANNORA_DOMAIN   Use this hostname instead of <public-ip>.sslip.io
+#   SPANNORA_NO_PROXY If set, skip Caddy install and config
 
 set -euo pipefail
 
 REPO="gididaf/spannora"
 INSTALL_DIR="/opt/spannora"
-SERVICE_USER="spannora"
 SERVICE_NAME="spannora"
 NODE_MAJOR="20"
+CADDY_CONF="/etc/caddy/conf.d/spannora.caddy"
+CADDY_MAIN="/etc/caddy/Caddyfile"
 
 say()  { printf "\033[1;36m▸\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
@@ -20,7 +25,7 @@ warn() { printf "\033[1;33m!\033[0m %s\n" "$*" >&2; }
 die()  { printf "\033[1;31m✗\033[0m %s\n" "$*" >&2; exit 1; }
 
 # --- Sanity ---
-[[ "$(uname -s)" == "Linux" ]] || die "Only Linux is supported by this installer. (Mac install coming later — for dev see README.)"
+[[ "$(uname -s)" == "Linux" ]] || die "Only Linux is supported by this installer."
 command -v systemctl >/dev/null || die "systemd is required."
 command -v curl >/dev/null || die "curl is required."
 command -v tar >/dev/null || die "tar is required."
@@ -62,19 +67,10 @@ else
   ok "Node $(node --version) already present"
 fi
 
-# --- Service user ---
-if id "$SERVICE_USER" >/dev/null 2>&1; then
-  ok "User $SERVICE_USER already exists"
-else
-  say "Creating system user $SERVICE_USER"
-  useradd --system --create-home --home-dir "/home/$SERVICE_USER" --shell /bin/bash "$SERVICE_USER"
-  ok "User $SERVICE_USER created"
-fi
-
 # --- Latest release ---
 say "Looking up latest release of $REPO"
 release_json=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest") \
-  || die "Couldn't fetch release info. Has a release been published?"
+  || die "Couldn't fetch release info."
 
 tarball_url=$(echo "$release_json" \
   | grep '"browser_download_url"' \
@@ -82,7 +78,7 @@ tarball_url=$(echo "$release_json" \
   | head -1)
 version=$(echo "$release_json" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
 
-[[ -n "$tarball_url" ]] || die "Latest release has no .tar.gz asset attached."
+[[ -n "$tarball_url" ]] || die "Latest release has no .tar.gz asset."
 ok "Latest release: $version"
 
 # --- Download + extract ---
@@ -98,12 +94,26 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 tar -xzf "$tmpdir/spannora.tar.gz" -C "$INSTALL_DIR" --strip-components=1
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chown -R root:root "$INSTALL_DIR"
 ok "Extracted to $INSTALL_DIR"
+
+# --- Legacy migration ---
+# Older installs used a dedicated `spannora` system user. If we find that
+# user's Claude auth and root doesn't have its own, copy it over so the
+# upgrade keeps working.
+if [[ -d /home/spannora/.claude && ! -d /root/.claude ]]; then
+  say "Migrating Claude Code auth from spannora user to /root/.claude"
+  cp -r /home/spannora/.claude /root/
+  chown -R root:root /root/.claude
+  ok "Auth migrated"
+fi
+if [[ -d /var/lib/spannora ]]; then
+  chown -R root:root /var/lib/spannora || true
+fi
 
 # --- npm install (prod only) ---
 say "Installing production dependencies (this may take a minute)"
-sudo -u "$SERVICE_USER" -- bash -lc "cd '$INSTALL_DIR' && npm install --omit=dev --no-audit --no-fund --silent" \
+(cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --silent) \
   || die "npm install failed. If better-sqlite3 fails to build, install build tools: $PM install -y build-essential python3"
 ok "Dependencies installed"
 
@@ -116,14 +126,93 @@ systemctl restart "$SERVICE_NAME"
 
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-  ok "Service running (listening on 127.0.0.1:7878)"
+  ok "Service running on 127.0.0.1:7878"
 else
   warn "Service did not start cleanly — inspect with: journalctl -u $SERVICE_NAME -n 50"
 fi
 
-# Try to extract the one-time setup token from the service log so we can
-# display it directly. Token format is 32-char base64url (24 random bytes).
-# Only present when no users exist yet — second-run upgrades have none.
+# --- Reverse proxy (Caddy + sslip.io by default) ---
+DOMAIN="${SPANNORA_DOMAIN:-}"
+SETUP_CADDY=1
+if [[ -n "${SPANNORA_NO_PROXY:-}" ]]; then
+  SETUP_CADDY=0
+fi
+
+if [[ "$SETUP_CADDY" -eq 1 && -z "$DOMAIN" ]]; then
+  say "Detecting public IPv4 for sslip.io"
+  PUBLIC_IP=$(
+    curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null \
+    || curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null \
+    || curl -fsSL --max-time 5 https://icanhazip.com 2>/dev/null \
+    || true
+  )
+  PUBLIC_IP=$(echo "${PUBLIC_IP:-}" | tr -d '[:space:]')
+  if [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    DOMAIN="${PUBLIC_IP}.sslip.io"
+    ok "Public IPv4 $PUBLIC_IP → $DOMAIN"
+  else
+    warn "Couldn't auto-detect a public IPv4 address."
+    warn "Set SPANNORA_DOMAIN=<your.domain> and re-run, or configure your proxy manually."
+    SETUP_CADDY=0
+  fi
+fi
+
+if [[ "$SETUP_CADDY" -eq 1 ]]; then
+  # Install Caddy if missing.
+  if ! command -v caddy >/dev/null; then
+    say "Installing Caddy"
+    case "$PM" in
+      apt)
+        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https gpg curl >/dev/null
+        curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+          | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+        curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+          > /etc/apt/sources.list.d/caddy-stable.list
+        apt-get update -qq
+        apt-get install -y caddy
+        ;;
+      dnf|yum)
+        "$PM" install -y 'dnf-command(copr)' >/dev/null 2>&1 || true
+        "$PM" copr enable -y @caddy/caddy
+        "$PM" install -y caddy
+        ;;
+      *)
+        warn "Don't know how to install Caddy on this distro. Configure your reverse proxy manually."
+        SETUP_CADDY=0
+        ;;
+    esac
+    [[ "$SETUP_CADDY" -eq 1 ]] && ok "Caddy installed"
+  else
+    ok "Caddy already installed"
+  fi
+fi
+
+if [[ "$SETUP_CADDY" -eq 1 ]]; then
+  say "Configuring Caddy for $DOMAIN"
+  mkdir -p /etc/caddy/conf.d
+
+  # Make sure /etc/caddy/Caddyfile imports our snippet dir.
+  if [[ ! -f "$CADDY_MAIN" ]]; then
+    echo 'import conf.d/*.caddy' > "$CADDY_MAIN"
+  elif ! grep -qE 'import[[:space:]]+(\./)?conf\.d/' "$CADDY_MAIN"; then
+    printf '\nimport conf.d/*.caddy\n' >> "$CADDY_MAIN"
+  fi
+
+  cat > "$CADDY_CONF" <<EOF
+${DOMAIN} {
+    reverse_proxy 127.0.0.1:7878 {
+        transport http { read_timeout 1h }
+    }
+}
+EOF
+
+  systemctl enable caddy >/dev/null 2>&1 || true
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+  ok "Caddy serving $DOMAIN → 127.0.0.1:7878"
+fi
+
+# --- Setup token (only meaningful before first user is created) ---
+sleep 1
 setup_token=$(journalctl -u "$SERVICE_NAME" --no-pager -n 200 2>/dev/null \
   | grep -oE '[A-Za-z0-9_-]{32}' \
   | tail -1 || true)
@@ -134,65 +223,70 @@ cat <<EOF
   │  spannora $version installed                                        │
   ╰─────────────────────────────────────────────────────────────────────╯
 
-  Next steps:
-
-  1. Authenticate Claude Code as the service user (once):
-
-       sudo -iu $SERVICE_USER node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
-
-     Inside the REPL:  /login → URL → sign in → /exit
-     Credentials land in /home/$SERVICE_USER/.claude/.
-
-  2. Reverse proxy. Paste this prompt into your own Claude Code session
-     (laptop or wherever — Claude needs SSH access to this host, or you
-     can run it directly on this host) and let it handle the config:
-
-       ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-       spannora is installed and running on this host as a systemd
-       service, listening on 127.0.0.1:7878. Please set up a reverse
-       proxy for it, terminating HTTPS.
-
-       - Domain: <REPLACE_WITH_YOUR_DOMAIN>
-       - Upstream: 127.0.0.1:7878
-       - Detect Caddy, nginx, or Apache. If none, recommend Caddy and
-         pause for me to install it.
-       - Critical: upstream read timeout >= 1 hour. spannora streams
-         long Server-Sent Events while Claude is thinking; default
-         timeouts cut responses off mid-reply.
-       - Reload the proxy and verify with
-             curl -fsSI https://<DOMAIN>
-         that it returns a 200 or 302.
-       ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-
-     Or do it manually — Caddy snippet (drop into /etc/caddy/Caddyfile):
-
-         <DOMAIN> {
-             reverse_proxy 127.0.0.1:7878 {
-                 transport http { read_timeout 1h }
-             }
-         }
 EOF
 
-if [[ -n "$setup_token" ]]; then
+if [[ -n "$DOMAIN" && "$SETUP_CADDY" -eq 1 ]]; then
   cat <<EOF
+  Open in your browser:
 
-  3. One-time setup token (single-use, regenerated on service restart):
+      https://$DOMAIN
 
-         $setup_token
+  Caddy provisions a Let's Encrypt cert on first request — give it
+  ~30 seconds before the HTTPS handshake settles.
 
-     Visit https://<DOMAIN> once the proxy is up. Paste this token on the
-     setup page, choose a username + password, and you're chatting.
+EOF
+elif [[ -n "$DOMAIN" ]]; then
+  cat <<EOF
+  Configure a reverse proxy yourself, then open:
+
+      https://$DOMAIN
+
 EOF
 else
   cat <<EOF
+  spannora is listening on 127.0.0.1:7878. Either:
 
-  3. This host already has a spannora user account — no setup token needed.
-     Visit https://<DOMAIN> once the proxy is up and sign in.
+  - SSH-tunnel to test:
+        ssh -L 7878:127.0.0.1:7878 root@<this-host>
+        open http://localhost:7878 in your browser
+  - Or re-run with SPANNORA_DOMAIN=<your.domain>:
+        SPANNORA_DOMAIN=chat.example.com bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh)
+
+EOF
+fi
+
+if [[ -n "$setup_token" ]]; then
+  cat <<EOF
+  One-time setup token (single-use, regenerated on service restart):
+
+      $setup_token
+
+  Paste it on the setup page, then pick a username + password.
+
+EOF
+fi
+
+# --- Claude auth check ---
+if [[ -d /root/.claude ]]; then
+  ok "Claude Code auth detected at /root/.claude — spannora will reuse it"
+else
+  cat <<EOF
+  ! Claude Code isn't authenticated for root yet. Run once:
+
+      node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+
+    Inside the REPL: /login → URL → sign in → /exit
+
 EOF
 fi
 
 cat <<EOF
 
-  Re-run this installer any time to upgrade. Data and credentials persist.
+  ! Note: spannora runs as root. Any tool call Claude makes (Bash, Edit,
+    Write...) has full root privileges on this host. That's the point of
+    'control my VMs from my phone' — but it means a careless prompt can
+    nuke things. Treat it like a root shell.
+
+  Re-run this installer to upgrade. Data and credentials persist.
 
 EOF

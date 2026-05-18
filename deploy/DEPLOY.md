@@ -1,52 +1,53 @@
 # Deploying spannora to a Linux VPS
 
-This walks through a one-time manual deploy. Phase 6 will turn this into a `curl | sh` installer; for now you do the steps yourself.
+The one-line installer (`install.sh`) does all of this automatically. This doc walks through the same steps by hand for when you want to do something custom.
 
 ## Prerequisites on the VPS
 
-- Ubuntu / Debian (or any systemd distro)
+- Linux with systemd (Ubuntu / Debian / Fedora / etc.)
 - **Node.js ≥ 20**
-- **Caddy** (or any TLS-terminating reverse proxy)
-- A domain pointing at the VPS
+- A public IPv4 (any cheap VPS provider qualifies)
+- Root access (spannora runs as root by default — see "Why root" below)
 
-## 1. Create the service user
+## Why root
 
-```bash
-sudo useradd --system --create-home \
-    --home-dir /home/spannora \
-    --shell /bin/bash spannora
-```
+The default systemd unit has no `User=` line, so the service runs as root. The SDK reuses `/root/.claude/` for Claude Code auth — whatever account you've already logged `claude` into on this VM, spannora picks up automatically. Tool calls (Bash, Edit, Write…) inherit root's filesystem access, which is the whole point if you're using spannora to control a VM from your phone.
 
-The user owns its own home so the Agent SDK can store its Claude Code auth in `~/.claude/`.
+If you'd rather sandbox, add `User=<some-user>` + `Group=<some-user>` to `spannora.service` and authenticate Claude under that user instead. The SDK reads auth from `$HOME/.claude/`.
 
-## 2. Extract the tarball
+## 1. Extract the tarball
 
 ```bash
 sudo mkdir -p /opt/spannora
 sudo tar -xzf spannora-<version>.tar.gz -C /opt/spannora --strip-components=1
-sudo chown -R spannora:spannora /opt/spannora
+sudo chown -R root:root /opt/spannora
 ```
 
-## 3. Install production dependencies
+## 2. Install production dependencies
 
 ```bash
 cd /opt/spannora
-sudo -u spannora npm install --omit=dev
+sudo npm install --omit=dev
 ```
 
-This installs `@anthropic-ai/claude-agent-sdk`, `better-sqlite3` (native — needs `build-essential` on Debian/Ubuntu), and `bcryptjs`.
+Installs `@anthropic-ai/claude-agent-sdk`, `better-sqlite3` (native — needs `build-essential` on Debian/Ubuntu if no prebuilt binary), and `bcryptjs`.
 
-## 4. Authenticate Claude Code
-
-The Agent SDK ships its own bundled CLI at `node_modules/@anthropic-ai/claude-agent-sdk/cli.js` — no separate Claude Code install is needed. It just needs credentials in `~/.claude/` for the `spannora` user.
+## 3. Make sure Claude Code is authenticated for root
 
 ```bash
-sudo -iu spannora node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+ls /root/.claude/ 2>/dev/null && echo "auth present" || echo "need to /login"
 ```
 
-Inside the REPL: type `/login`, follow the OAuth URL in a browser, then `/exit`. Credentials land in `/home/spannora/.claude/` and the SDK reads them automatically on every request.
+If absent:
 
-## 5. Install the systemd unit
+```bash
+sudo node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+# inside the REPL:  /login  → URL  → sign in  →  /exit
+```
+
+The SDK ships its own bundled CLI at that path — no separate Claude Code install needed.
+
+## 4. Install the systemd unit
 
 ```bash
 sudo cp /opt/spannora/deploy/spannora.service /etc/systemd/system/spannora.service
@@ -54,39 +55,80 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now spannora
 ```
 
-Check it came up:
+Check:
 
 ```bash
 sudo systemctl status spannora
 sudo journalctl -u spannora -n 50
 ```
 
-On first start the log will print a **one-time setup token** in a box. Copy it.
+On first start the log prints a **one-time setup token** in a box. Copy it.
 
-## 6. Configure Caddy
+## 5. Reverse proxy
 
-Copy the snippet, edit the hostname:
+### Easy path: Caddy + sslip.io
+
+If you don't have a domain and just want HTTPS:
 
 ```bash
-sudo cp /opt/spannora/deploy/Caddyfile.example /etc/caddy/conf.d/spannora.caddy
-sudo $EDITOR /etc/caddy/conf.d/spannora.caddy   # replace your-domain.example.com
+# Install Caddy (Debian/Ubuntu):
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https gpg curl
+curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+
+# Find your public IP:
+PUBLIC_IP=$(curl -fsSL https://api.ipify.org)
+
+# Drop a Caddy snippet (replace IP in the hostname):
+sudo mkdir -p /etc/caddy/conf.d
+sudo tee /etc/caddy/conf.d/spannora.caddy >/dev/null <<EOF
+${PUBLIC_IP}.sslip.io {
+    reverse_proxy 127.0.0.1:7878 {
+        transport http { read_timeout 1h }
+    }
+}
+EOF
+
+# Make sure the main Caddyfile imports conf.d:
+grep -qE 'import[[:space:]]+(\./)?conf\.d/' /etc/caddy/Caddyfile \
+  || echo 'import conf.d/*.caddy' | sudo tee -a /etc/caddy/Caddyfile
+
 sudo systemctl reload caddy
 ```
 
-(If your Caddyfile is a single file, paste the block into `/etc/caddy/Caddyfile` instead.)
+Browse to `https://<your-ip>.sslip.io` — Caddy provisions a Let's Encrypt cert on first request.
 
-## 7. Complete setup in the browser
+### Custom domain
 
-Visit `https://<your-domain>` — Caddy provisions a Let's Encrypt cert (≈10 s on first hit), then redirects you to `/setup`. Paste the token from step 5 and pick a username / password. You're in.
+Same but replace `${PUBLIC_IP}.sslip.io` with your hostname. DNS A-record must point at this VPS before Caddy reloads (Let's Encrypt has to validate over HTTP).
+
+### nginx / Apache / something else
+
+Reverse-proxy `127.0.0.1:7878` with **upstream read timeout ≥ 1 hour** so streaming SSE responses don't get cut off mid-reply. Example for nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:7878;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_http_version 1.1;
+}
+```
+
+## 6. Complete setup in the browser
+
+Visit `https://<your-domain-or-sslip>` → /setup → paste the token from step 4 → pick a username/password. You're in.
 
 ## Where things live
 
 | Path | What |
 |---|---|
-| `/opt/spannora/` | Application code (read-only by service) |
-| `/var/lib/spannora/spannora.db` | SQLite — conversations, messages, users, sessions |
-| `/home/spannora/.claude/` | Claude Code SDK auth |
+| `/opt/spannora/` | Application code |
+| `/var/lib/spannora/spannora.db` | SQLite: conversations, messages, users, sessions |
+| `/root/.claude/` | Claude Code SDK auth |
 | `/etc/systemd/system/spannora.service` | Service definition |
+| `/etc/caddy/conf.d/spannora.caddy` | Caddy snippet (if installed) |
 | `journalctl -u spannora` | Structured logs |
 
 ## Common operations
@@ -98,25 +140,31 @@ sudo journalctl -u spannora -f
 # Restart after editing the .service file
 sudo systemctl daemon-reload && sudo systemctl restart spannora
 
-# Reset all users + sessions (regenerates the setup token on next start)
+# Reset all users + sessions (regenerates the setup token)
 sudo systemctl stop spannora
-sudo -u spannora SPANNORA_RESET=1 node /opt/spannora/dist/server.js  # ctrl-C after the token prints
+sudo SPANNORA_RESET=1 node /opt/spannora/dist/server.js  # ctrl-C after the token prints
 sudo systemctl start spannora
 
 # Back up the DB
-sudo -u spannora sqlite3 /var/lib/spannora/spannora.db ".backup '/tmp/spannora-backup.db'"
+sudo sqlite3 /var/lib/spannora/spannora.db ".backup '/tmp/spannora-backup.db'"
 ```
 
 ## Upgrading
 
-Drop a newer tarball in `/opt/spannora` and restart:
+The cleanest path is to re-run the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
+```
+
+Or by hand:
 
 ```bash
 sudo systemctl stop spannora
 sudo tar -xzf spannora-<newer-version>.tar.gz -C /opt/spannora --strip-components=1
-sudo chown -R spannora:spannora /opt/spannora
-cd /opt/spannora && sudo -u spannora npm install --omit=dev
+sudo chown -R root:root /opt/spannora
+cd /opt/spannora && sudo npm install --omit=dev
 sudo systemctl start spannora
 ```
 
-Schema migrations are idempotent (`CREATE TABLE IF NOT EXISTS`), so existing data is preserved.
+Schema migrations are idempotent (`CREATE TABLE IF NOT EXISTS`), so data is preserved.
