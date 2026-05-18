@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tar.gz
+.DS_Store
+*.log
+spannora.db
+spannora.db-journal
+spannora.db-shm
+spannora.db-wal
+.env
+.env.local

@@ -1,0 +1,15 @@
+# Replace your-domain.example.com with the hostname pointing at this VPS.
+# Caddy auto-provisions a Let's Encrypt certificate on first request.
+#
+# Drop this block into /etc/caddy/Caddyfile (or include it from there), then:
+#     sudo systemctl reload caddy
+
+your-domain.example.com {
+    # SSE keeps responses open while Claude thinks. Bump the upstream read
+    # timeout so Caddy doesn't cut the stream off mid-reply.
+    reverse_proxy 127.0.0.1:7878 {
+        transport http {
+            read_timeout 1h
+        }
+    }
+}

@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>spannora</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f1115;
+        --panel: #151922;
+        --border: #252a36;
+        --text: #e6e9ef;
+        --muted: #8a93a6;
+        --accent: #7aa2f7;
+        --user: #1f6feb;
+        --error: #f87171;
+      }
+      * { box-sizing: border-box; }
+      html { height: 100%; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        height: 100dvh;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        flex-direction: row;
+        overflow: hidden;
+      }
+
+      /* Sidebar */
+      .sidebar {
+        flex: 0 0 240px;
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .sidebar-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--accent);
+      }
+      .sidebar-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .sidebar-icon-btn {
+        background: transparent;
+        color: var(--muted);
+        font-size: 20px;
+        line-height: 1;
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 400;
+      }
+      .sidebar-icon-btn:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .sidebar-close-btn {
+        display: none;
+        background: transparent;
+        color: var(--muted);
+        font-size: 22px;
+        line-height: 1;
+        padding: 0 4px;
+        border: none;
+        cursor: pointer;
+        font-weight: 400;
+      }
+      .new-chat-btn {
+        margin: 10px 12px 6px;
+        padding: 8px 12px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px dashed var(--border);
+        border-radius: 6px;
+        font-weight: 500;
+        cursor: pointer;
+        font-size: 13px;
+        text-align: left;
+      }
+      .new-chat-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .sidebar-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 8px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .sidebar-item {
+        padding: 8px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px;
+        align-items: center;
+        min-width: 0;
+      }
+      .sidebar-item:hover { background: rgba(122, 162, 247, 0.06); }
+      .sidebar-item.active { background: rgba(122, 162, 247, 0.14); }
+      .sidebar-item .title {
+        font-size: 13px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+      .sidebar-item .cwd {
+        grid-column: 1 / 2;
+        font-size: 11px;
+        color: var(--muted);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        direction: rtl;
+        text-align: left;
+        min-width: 0;
+      }
+      .sidebar-item .del {
+        grid-row: 1 / 3;
+        grid-column: 2;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1;
+        padding: 4px 6px;
+        cursor: pointer;
+        opacity: 0;
+        font-weight: 400;
+      }
+      .sidebar-item:hover .del,
+      .sidebar-item.active .del { opacity: 1; }
+      .sidebar-item .del:hover { color: var(--error); }
+      .sidebar-empty {
+        padding: 16px;
+        color: var(--muted);
+        font-size: 12px;
+        text-align: center;
+        font-style: italic;
+      }
+
+      .sidebar-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: 80;
+      }
+      .sidebar-backdrop.hidden { display: none; }
+
+      .main-pane {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+      }
+
+      .sidebar-toggle-btn {
+        display: none;
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 4px 10px;
+        font-size: 16px;
+        line-height: 1;
+        font-weight: 400;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .empty-state {
+        margin: auto;
+        text-align: center;
+        color: var(--muted);
+        font-size: 13px;
+        padding: 20px;
+        max-width: 380px;
+      }
+      .empty-state h2 {
+        margin: 0 0 8px;
+        font-size: 16px;
+        color: var(--text);
+      }
+      .empty-state .hint { font-size: 12px; }
+
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: var(--panel);
+        min-width: 0;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--accent);
+        flex-shrink: 0;
+      }
+      .cwd-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        font: inherit;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+      }
+      .cwd-btn:hover { border-color: var(--accent); }
+      .cwd-btn .cwd-label { color: var(--muted); flex-shrink: 0; }
+      .cwd-btn #cwd-display {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        /* Truncate at the START so the leaf directory stays visible: */
+        direction: rtl;
+        text-align: left;
+      }
+      .cwd-btn .cwd-empty { color: var(--muted); font-style: italic; }
+      main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* Prevent flex from squashing transcript children once the column fills up.
+         Without this, <details> in collapsed state shrinks to a thin line. */
+      main > * { flex-shrink: 0; }
+      .msg {
+        padding: 10px 12px;
+        border-radius: 8px;
+        max-width: 90%;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+      }
+      .msg.user {
+        background: var(--user);
+        color: white;
+        align-self: flex-end;
+      }
+      .msg.assistant {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        align-self: flex-start;
+        max-width: 90%;
+      }
+      .msg.error {
+        background: #2a1010;
+        border: 1px solid var(--error);
+        color: var(--error);
+      }
+      .msg.system {
+        align-self: center;
+        color: var(--muted);
+        font-size: 12px;
+        background: transparent;
+      }
+      footer {
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+        padding: 12px 16px;
+        display: flex;
+        gap: 8px;
+      }
+      #prompt {
+        flex: 1;
+        padding: 10px 12px;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: inherit;
+        resize: none;
+        min-height: 40px;
+        max-height: 200px;
+      }
+      #prompt:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      button {
+        padding: 0 16px;
+        background: var(--accent);
+        color: #0b0e13;
+        border: none;
+        border-radius: 6px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button.stop { background: var(--error); color: white; }
+
+      /* Tool-use cards — native <details>/<summary>, no JS toggle */
+      details.tool-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        align-self: stretch;
+        width: 100%;
+        max-width: 100%;
+        min-height: 40px;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+      }
+      summary.tool-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        min-height: 38px;
+        cursor: pointer;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.4;
+        user-select: none;
+        list-style: none;
+      }
+      summary.tool-header::-webkit-details-marker { display: none; }
+      summary.tool-header::marker { content: ""; }
+      summary.tool-header:hover { background: rgba(122, 162, 247, 0.06); }
+      .tool-arrow {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1;
+        display: inline-block;
+        flex: 0 0 12px;
+        text-align: center;
+        transition: transform 0.15s;
+      }
+      details.tool-card[open] .tool-arrow { transform: rotate(90deg); }
+      .tool-name {
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 13px;
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+      .tool-summary {
+        color: var(--muted);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.4;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+      .tool-status {
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1;
+        min-width: 14px;
+        text-align: right;
+      }
+      .tool-status.pending { animation: pulse 1.2s ease-in-out infinite; }
+      .tool-status.ok { color: #4ade80; }
+      .tool-status.err { color: var(--error); }
+      @keyframes pulse { 50% { opacity: 0.4; } }
+      .tool-body {
+        border-top: 1px solid var(--border);
+        padding: 10px 12px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .tool-section-label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-top: 4px;
+      }
+      .tool-section {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin: 0;
+        font: inherit;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow-wrap: anywhere;
+        max-height: 360px;
+        overflow: auto;
+      }
+      .tool-section.empty { color: var(--muted); font-style: italic; }
+
+      /* Phase 2b — pretty renderers */
+      .tool-waiting {
+        color: var(--muted);
+        font-style: italic;
+        font-size: 12px;
+        padding: 2px 0;
+      }
+      .file-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        padding-bottom: 2px;
+      }
+      .file-meta .path {
+        color: var(--text);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        word-break: break-all;
+      }
+      .file-meta .extra { font-style: italic; }
+
+      .code-block,
+      .read-content,
+      .bash-cmd,
+      .bash-output,
+      .tool-error,
+      .raw-pane {
+        margin: 0;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        overflow: auto;
+        max-height: 500px;
+      }
+      .code-block, .read-content {
+        white-space: pre;
+        word-wrap: normal;
+      }
+      .bash-cmd {
+        color: var(--accent);
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-bottom: 2px;
+      }
+      .bash-desc {
+        color: var(--muted);
+        font-size: 12px;
+        font-style: italic;
+        padding: 2px 0;
+      }
+      .bash-output { white-space: pre-wrap; word-break: break-word; }
+      .bash-output.err { border-color: var(--error); }
+      .bash-status {
+        font-size: 11px;
+        color: #4ade80;
+        padding: 2px 0;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      }
+      .bash-status.err { color: var(--error); }
+
+      .diff-block {
+        margin: 0;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        overflow: auto;
+        max-height: 500px;
+        padding: 4px 0;
+      }
+      .diff-line {
+        padding: 0 8px;
+        white-space: pre;
+      }
+      .diff-line.add { background: rgba(74, 222, 128, 0.10); color: #4ade80; }
+      .diff-line.del { background: rgba(248, 113, 113, 0.10); color: #f87171; }
+      .diff-line.eq  { color: var(--muted); }
+      .diff-line.add::before { content: "+ "; opacity: 0.7; }
+      .diff-line.del::before { content: "- "; opacity: 0.7; }
+      .diff-line.eq::before  { content: "  "; opacity: 0.4; }
+
+      .result-list {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        max-height: 500px;
+        overflow: auto;
+      }
+      .result-item {
+        padding: 4px 10px;
+        border-bottom: 1px solid var(--border);
+        white-space: pre;
+        overflow-x: auto;
+      }
+      .result-item:last-child { border-bottom: none; }
+      .result-empty {
+        padding: 14px;
+        text-align: center;
+        color: var(--muted);
+        font-style: italic;
+      }
+
+      .tool-error {
+        border-color: var(--error);
+        color: var(--error);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .raw-toggle { margin-top: 4px; }
+      .raw-toggle summary {
+        cursor: pointer;
+        font-size: 11px;
+        color: var(--muted);
+        padding: 4px 0;
+        list-style: none;
+        user-select: none;
+      }
+      .raw-toggle summary::-webkit-details-marker { display: none; }
+      .raw-toggle summary::marker { content: ""; }
+      .raw-toggle summary:hover { color: var(--text); }
+      .raw-toggle summary::before { content: "▸ "; font-size: 9px; }
+      .raw-toggle[open] summary::before { content: "▾ "; font-size: 9px; }
+      .raw-pane {
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-height: 360px;
+      }
+
+      /* hljs theme override for our background — the CDN theme expects its own
+         palette; this keeps the bg consistent with our card. */
+      pre.hljs { background: var(--bg) !important; }
+
+      /* Picker modal */
+      .picker {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 16px;
+      }
+      .picker.hidden { display: none; }
+      .picker-card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        width: 100%;
+        max-width: 640px;
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .picker-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+      }
+      .picker-header .close {
+        background: transparent;
+        color: var(--muted);
+        font-size: 22px;
+        line-height: 1;
+        padding: 0 4px;
+        border: none;
+        cursor: pointer;
+        font-weight: 400;
+      }
+      .picker-path {
+        padding: 10px 12px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        border-bottom: 1px solid var(--border);
+      }
+      .picker-path .up {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 6px 10px;
+        font-size: 13px;
+        font-weight: 400;
+      }
+      .picker-path input {
+        flex: 1;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        color: var(--text);
+        font: inherit;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+      }
+      .picker-list {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 220px;
+        max-height: 50vh;
+      }
+      .picker-entry {
+        padding: 8px 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid var(--border);
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 13px;
+      }
+      .picker-entry:hover { background: rgba(122, 162, 247, 0.08); }
+      .picker-entry.hidden-entry { opacity: 0.6; }
+      .picker-entry .icon { font-size: 14px; }
+      .picker-empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .picker-empty.error { color: var(--error); }
+      .picker-mkdir {
+        padding: 10px 12px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        gap: 8px;
+        background: var(--bg);
+      }
+      .picker-mkdir.hidden { display: none; }
+      .picker-mkdir input {
+        flex: 1;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        color: var(--text);
+        font: inherit;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 12px;
+      }
+      .picker-mkdir button {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        font-weight: 400;
+        font-size: 13px;
+      }
+      .picker-mkdir button.primary {
+        background: var(--accent);
+        color: #0b0e13;
+        border: none;
+        font-weight: 600;
+      }
+      .picker-footer {
+        padding: 10px 12px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .picker-footer .spacer { flex: 1; }
+      .picker-footer button {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        font-weight: 400;
+        font-size: 13px;
+      }
+      .picker-footer button.primary {
+        background: var(--accent);
+        color: #0b0e13;
+        border: none;
+        font-weight: 600;
+      }
+
+      /* Account modal */
+      .account-card { max-width: 480px; }
+      .account-section-label {
+        padding: 10px 16px 4px;
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-top: 1px solid var(--border);
+      }
+      .account-sessions {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0 12px 8px;
+        max-height: 50vh;
+        min-height: 100px;
+      }
+      .account-session {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 4px 12px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        align-items: center;
+      }
+      .account-session.current { border-color: var(--accent); }
+      .account-session .ua {
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        color: var(--text);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+      .account-session .meta {
+        grid-column: 1 / 2;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .account-session .revoke {
+        grid-row: 1 / 3;
+        grid-column: 2;
+        background: transparent;
+        color: var(--error);
+        border: 1px solid var(--border);
+        font-size: 11px;
+        font-weight: 500;
+        padding: 6px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .account-session .revoke:hover { border-color: var(--error); }
+      .account-session .current-badge {
+        grid-row: 1 / 3;
+        grid-column: 2;
+        font-size: 10px;
+        color: var(--accent);
+        background: rgba(122, 162, 247, 0.12);
+        padding: 4px 8px;
+        border-radius: 4px;
+        text-align: center;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      /* Drawer behaviour: on narrower viewports the sidebar slides in over the
+         main pane instead of taking permanent space. */
+      @media (max-width: 768px) {
+        .sidebar {
+          position: fixed;
+          top: 0; bottom: 0; left: 0;
+          width: 80%;
+          max-width: 320px;
+          z-index: 90;
+          transform: translateX(-100%);
+          transition: transform 0.2s ease;
+        }
+        body.sidebar-open .sidebar { transform: translateX(0); }
+        body:not(.sidebar-open) .sidebar-backdrop { display: none; }
+        .sidebar-close-btn { display: inline-block; }
+        .sidebar-toggle-btn { display: inline-block; }
+      }
+
+      /* ≤ 480px — phones (incl. iPhone SE / 12 mini portrait) */
+      @media (max-width: 480px) {
+        header {
+          padding: 8px 10px;
+          gap: 8px;
+        }
+        .cwd-btn { padding: 6px 10px; font-size: 11px; }
+        .cwd-btn .cwd-label { display: none; }
+        main { padding: 10px; gap: 8px; }
+        footer { padding: 8px 10px; gap: 6px; }
+        #prompt { padding: 8px 10px; font-size: 13px; min-height: 38px; }
+        button { padding: 0 14px; font-size: 13px; }
+
+        /* full-screen modal on phones */
+        .picker { padding: 0; }
+        .picker-card {
+          width: 100%;
+          max-width: 100%;
+          height: 100dvh;
+          max-height: 100dvh;
+          border-radius: 0;
+          border: none;
+        }
+        .picker-header { padding: 10px 12px; font-size: 14px; }
+        .picker-path { padding: 8px 10px; }
+        .picker-path input { font-size: 12px; }
+        .picker-entry { padding: 10px 12px; font-size: 13px; }
+        .picker-list { max-height: none; }
+        .picker-footer {
+          padding: 8px 10px;
+          gap: 6px;
+        }
+        .picker-footer button,
+        .picker-mkdir button {
+          font-size: 12px;
+          padding: 8px 10px;
+          white-space: nowrap;
+        }
+        .picker-mkdir { padding: 8px 10px; gap: 6px; }
+      }
+
+      /* ≤ 360px — iPhone 4 / 5 class (320 CSS px) */
+      @media (max-width: 360px) {
+        header h1 { font-size: 13px; }
+        .cwd-btn { font-size: 10px; padding: 5px 8px; }
+        button { padding: 0 10px; font-size: 12px; }
+        #send { padding: 0 12px; }
+
+        .picker-header span:first-child { font-size: 13px; }
+        .picker-footer {
+          flex-wrap: nowrap;
+        }
+        .picker-footer button,
+        .picker-mkdir button {
+          font-size: 11px;
+          padding: 7px 8px;
+        }
+        #picker-mkdir-toggle { padding: 7px 6px; }
+        .picker-entry { font-size: 12px; padding: 9px 10px; gap: 8px; }
+        .picker-entry .icon { font-size: 13px; }
+      }
+    </style>
+  </head>
+  <body>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <span>spannora</span>
+        <div class="sidebar-header-actions">
+          <button id="new-chat-btn" class="sidebar-icon-btn" type="button" title="New chat" aria-label="New chat">+</button>
+          <button id="account-btn" class="sidebar-icon-btn" type="button" title="Account" aria-label="Account">⚙</button>
+          <button id="sidebar-close" class="sidebar-close-btn" type="button" aria-label="Close sidebar">×</button>
+        </div>
+      </div>
+      <div id="sidebar-list" class="sidebar-list"></div>
+    </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+
+    <div class="main-pane">
+      <header>
+        <button id="sidebar-toggle" class="sidebar-toggle-btn" type="button" aria-label="Open sidebar">☰</button>
+        <button id="cwd-btn" class="cwd-btn" type="button" title="Choose working directory">
+          <span class="cwd-label">cwd:</span>
+          <span id="cwd-display" class="cwd-empty">Choose folder…</span>
+        </button>
+      </header>
+      <main id="transcript"></main>
+      <footer>
+        <textarea id="prompt" placeholder="Ask Claude Code… (⌘/Ctrl+Enter to send)"></textarea>
+        <button id="send">Send</button>
+      </footer>
+    </div>
+
+    <div id="picker" class="picker hidden" aria-hidden="true">
+      <div class="picker-card">
+        <div class="picker-header">
+          <span>Choose working directory</span>
+          <button id="picker-close" class="close" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="picker-path">
+          <button id="picker-up" class="up" type="button" title="Go up">↑</button>
+          <input id="picker-path-input" spellcheck="false" placeholder="Type a path and press Enter" />
+        </div>
+        <div id="picker-list" class="picker-list"></div>
+        <div id="picker-mkdir-row" class="picker-mkdir hidden">
+          <input id="picker-mkdir-name" placeholder="New folder name" spellcheck="false" />
+          <button id="picker-mkdir-confirm" class="primary" type="button">Create</button>
+          <button id="picker-mkdir-cancel" type="button">Cancel</button>
+        </div>
+        <div class="picker-footer">
+          <button id="picker-mkdir-toggle" type="button">+ New folder</button>
+          <span class="spacer"></span>
+          <button id="picker-cancel" type="button">Cancel</button>
+          <button id="picker-select" class="primary" type="button">Use this folder</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="account-modal" class="picker hidden" aria-hidden="true">
+      <div class="picker-card account-card">
+        <div class="picker-header">
+          <span id="account-username">Account</span>
+          <button id="account-close" class="close" type="button" aria-label="Close">×</button>
+        </div>
+        <div class="account-section-label">Active sessions</div>
+        <div id="account-sessions" class="account-sessions"></div>
+        <div class="picker-footer">
+          <span class="spacer"></span>
+          <button id="account-logout" class="primary" type="button">Log out</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

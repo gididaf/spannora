@@ -1,0 +1,37 @@
+[Unit]
+Description=spannora — self-hosted web chat for Claude Code
+Documentation=https://github.com/anthropics/claude-code
+After=network.target
+
+[Service]
+Type=simple
+User=spannora
+Group=spannora
+WorkingDirectory=/opt/spannora
+
+# Run the compiled JS with the system node (>= 20).
+ExecStart=/usr/bin/env node /opt/spannora/dist/server.js
+
+Restart=on-failure
+RestartSec=5
+
+# State dir → /var/lib/spannora (owned 0700 by the service user).
+# SQLite DB lives here so it survives package upgrades.
+StateDirectory=spannora
+StateDirectoryMode=0700
+
+Environment=NODE_ENV=production
+Environment=SPANNORA_HOST=127.0.0.1
+Environment=SPANNORA_PORT=7878
+Environment=SPANNORA_DB=/var/lib/spannora/spannora.db
+Environment=IS_SANDBOX=1
+
+# Light hardening. ProtectSystem=full keeps /usr, /etc, /boot read-only but
+# leaves /home and /var/www writable — Claude needs to edit files inside the
+# user's chosen working directory.
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
