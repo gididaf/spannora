@@ -942,22 +942,49 @@
         }
         body.sidebar-open .sidebar { transform: translateX(0); }
         body:not(.sidebar-open) .sidebar-backdrop { display: none; }
-        .sidebar-close-btn { display: inline-block; }
-        .sidebar-toggle-btn { display: inline-block; }
+        .sidebar-close-btn { display: inline-flex; align-items: center; justify-content: center; }
+        .sidebar-toggle-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+        /* Beefier touch targets for sidebar header controls when the sidebar
+           is a drawer (touch context). */
+        .sidebar-header { padding: 14px 14px; }
+        .sidebar-header-actions { gap: 6px; }
+        .sidebar-icon-btn {
+          font-size: 22px;
+          padding: 0 12px;
+          min-width: 40px;
+          min-height: 40px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .sidebar-close-btn {
+          font-size: 28px;
+          padding: 0 10px;
+          min-width: 40px;
+          min-height: 40px;
+        }
+        .sidebar-toggle-btn {
+          font-size: 20px;
+          padding: 0 14px;
+          min-width: 44px;
+          min-height: 40px;
+        }
       }
 
       /* ≤ 480px — phones (incl. iPhone SE / 12 mini portrait) */
       @media (max-width: 480px) {
         header {
-          padding: 8px 10px;
-          gap: 8px;
+          padding: 10px 12px;
+          gap: 10px;
         }
-        .cwd-btn { padding: 6px 10px; font-size: 11px; }
+        .sidebar-toggle-btn { font-size: 20px; padding: 0 14px; min-width: 44px; min-height: 44px; }
+        .cwd-btn { padding: 10px 14px; font-size: 13px; min-height: 44px; }
         .cwd-btn .cwd-label { display: none; }
         main { padding: 10px; gap: 8px; }
-        footer { padding: 8px 10px; gap: 6px; }
-        #prompt { padding: 8px 10px; font-size: 13px; min-height: 38px; }
-        button { padding: 0 14px; font-size: 13px; }
+        footer { padding: 10px 12px; gap: 8px; }
+        #prompt { padding: 10px 12px; font-size: 14px; min-height: 44px; }
+        button { padding: 0 16px; font-size: 14px; }
 
         /* full-screen modal on phones */
         .picker { padding: 0; }
@@ -969,43 +996,76 @@
           border-radius: 0;
           border: none;
         }
-        .picker-header { padding: 10px 12px; font-size: 14px; }
-        .picker-path { padding: 8px 10px; }
-        .picker-path input { font-size: 12px; }
-        .picker-entry { padding: 10px 12px; font-size: 13px; }
+        .picker-header { padding: 12px 14px; font-size: 15px; }
+        .picker-header .close { font-size: 28px; padding: 4px 10px; min-width: 40px; min-height: 40px; }
+        .picker-path { padding: 10px 12px; gap: 8px; }
+        .picker-path .up {
+          padding: 0 14px;
+          font-size: 18px;
+          min-height: 44px;
+          min-width: 44px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .picker-path input { padding: 10px 12px; font-size: 14px; min-height: 44px; }
+        .picker-entry { padding: 12px 14px; font-size: 14px; }
+        .picker-entry .icon { font-size: 16px; }
         .picker-list { max-height: none; }
         .picker-footer {
-          padding: 8px 10px;
-          gap: 6px;
+          padding: 10px 12px;
+          gap: 8px;
         }
         .picker-footer button,
         .picker-mkdir button {
-          font-size: 12px;
-          padding: 8px 10px;
+          font-size: 14px;
+          padding: 12px 14px;
+          min-height: 44px;
           white-space: nowrap;
         }
-        .picker-mkdir { padding: 8px 10px; gap: 6px; }
+        .picker-mkdir { padding: 10px 12px; gap: 8px; }
+        .picker-mkdir input { padding: 10px 12px; font-size: 14px; min-height: 44px; }
       }
 
       /* ≤ 360px — iPhone 4 / 5 class (320 CSS px) */
       @media (max-width: 360px) {
         header h1 { font-size: 13px; }
-        .cwd-btn { font-size: 10px; padding: 5px 8px; }
-        button { padding: 0 10px; font-size: 12px; }
-        #send { padding: 0 12px; }
+        header { padding: 8px 10px; gap: 8px; }
+        .sidebar-toggle-btn { font-size: 18px; padding: 0 12px; min-width: 40px; min-height: 40px; }
+        .cwd-btn { font-size: 12px; padding: 8px 10px; min-height: 40px; }
+        button { padding: 0 12px; font-size: 13px; }
+        #send { padding: 0 14px; }
+        #prompt { font-size: 13px; min-height: 40px; padding: 9px 10px; }
 
-        .picker-header span:first-child { font-size: 13px; }
-        .picker-footer {
-          flex-wrap: nowrap;
+        .picker-header span:first-child { font-size: 14px; }
+        .picker-path { padding: 8px 10px; gap: 6px; }
+        .picker-path .up {
+          padding: 0 12px;
+          font-size: 16px;
+          min-height: 40px;
+          min-width: 40px;
         }
+        .picker-path input { padding: 9px 10px; font-size: 13px; min-height: 40px; }
+        /* Allow the three footer buttons to wrap to a second row rather than
+           shrink to non-tappable sizes at very narrow widths. */
+        .picker-footer {
+          flex-wrap: wrap;
+          padding: 8px 10px;
+          gap: 6px;
+        }
+        .picker-footer .spacer { display: none; }
         .picker-footer button,
         .picker-mkdir button {
-          font-size: 11px;
-          padding: 7px 8px;
+          font-size: 13px;
+          padding: 10px 12px;
+          min-height: 40px;
+          flex: 1 1 auto;
         }
-        #picker-mkdir-toggle { padding: 7px 6px; }
-        .picker-entry { font-size: 12px; padding: 9px 10px; gap: 8px; }
-        .picker-entry .icon { font-size: 13px; }
+        .picker-footer #picker-mkdir-toggle { flex: 1 0 100%; }
+        .picker-mkdir { padding: 8px 10px; gap: 6px; }
+        .picker-mkdir input { font-size: 13px; padding: 9px 10px; min-height: 40px; }
+        .picker-entry { font-size: 13px; padding: 10px 10px; gap: 8px; }
+        .picker-entry .icon { font-size: 14px; }
       }
     </style>
   </head>
