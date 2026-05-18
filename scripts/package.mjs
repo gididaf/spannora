@@ -55,7 +55,13 @@ for (const item of items) {
 }
 
 // 4. Create the tarball at the repo root.
-run(`tar -czf "${tarballPath}" -C "${stageDir}" "${stageName}"`);
+// On macOS, `bsdtar` writes PAX headers for extended attributes
+// (`LIBARCHIVE.xattr.com.apple.provenance` etc.) which make GNU tar on Linux
+// emit "Ignoring unknown extended header keyword" warnings on extract.
+// Suppressing both xattr categories on Mac builds gives us a clean tarball.
+const isMac = os.platform() === "darwin";
+const tarFlags = isMac ? "--no-xattrs --no-mac-metadata --no-fflags" : "";
+run(`tar ${tarFlags} -czf "${tarballPath}" -C "${stageDir}" "${stageName}"`);
 
 // 5. Clean up staging.
 fs.rmSync(stageDir, { recursive: true, force: true });
