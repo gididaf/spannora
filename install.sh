@@ -7,8 +7,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
 #
 # Environment overrides:
-#   SPANNORA_DOMAIN   Use this hostname instead of <public-ip>.sslip.io
-#   SPANNORA_NO_PROXY If set, skip all reverse-proxy install/config
+#   SPANNORA_DOMAIN      Use this hostname instead of <public-ip>.sslip.io
+#   SPANNORA_NO_PROXY    Skip all reverse-proxy install/config
+#   SPANNORA_NO_HTTPS    On nginx hosts, skip the certbot/HTTPS step
+#   SPANNORA_ACME_EMAIL  Email used when registering with Let's Encrypt
+#                        (default: anonymous registration, no expiry notices)
 
 set -euo pipefail
 
@@ -103,9 +106,31 @@ EOF
   ok "Caddy serving $domain → 127.0.0.1:7878"
 }
 
-# --- Helper: configure nginx for our domain (HTTP-only; HTTPS via certbot
-# step printed at the end). nginx is left in charge of TLS — Caddy isn't
-# touched on hosts that already run nginx. ---
+# --- Helper: install certbot for nginx if missing ---
+install_certbot() {
+  if command -v certbot >/dev/null; then
+    return 0
+  fi
+  case "$PM" in
+    apt)
+      apt-get install -y certbot python3-certbot-nginx >/dev/null
+      ;;
+    dnf|yum)
+      "$PM" install -y certbot python3-certbot-nginx
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Set to 1 by configure_nginx if HTTPS via certbot succeeded.
+NGINX_HTTPS=0
+
+# --- Helper: configure nginx for our domain. Writes an HTTP-only proxy
+# block, reloads, then runs certbot --nginx to add HTTPS (unless
+# SPANNORA_NO_HTTPS is set). Idempotent: a re-run with a valid cert just
+# re-applies the SSL directives to the freshly-overwritten config. ---
 configure_nginx() {
   local domain="$1"
   say "Writing nginx config for $domain"
@@ -131,12 +156,43 @@ server {
 }
 EOF
 
-  if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx
-    ok "nginx serving $domain → 127.0.0.1:7878 (HTTP — finish HTTPS step below)"
-  else
+  if ! nginx -t >/dev/null 2>&1; then
     warn "nginx -t failed against the new config. Inspect with:  sudo nginx -t"
     warn "Config written to $NGINX_CONF but nginx was not reloaded."
+    return
+  fi
+  systemctl reload nginx
+  ok "nginx serving $domain → 127.0.0.1:7878 (HTTP)"
+
+  # --- HTTPS via certbot ---
+  if [[ -n "${SPANNORA_NO_HTTPS:-}" ]]; then
+    return
+  fi
+
+  if ! install_certbot; then
+    warn "Couldn't auto-install certbot on this distro."
+    warn "Get HTTPS manually:  sudo certbot --nginx -d $domain"
+    return
+  fi
+
+  local email_args
+  if [[ -n "${SPANNORA_ACME_EMAIL:-}" ]]; then
+    email_args="--email ${SPANNORA_ACME_EMAIL} --agree-tos --no-eff-email"
+  else
+    email_args="--register-unsafely-without-email --agree-tos"
+  fi
+
+  say "Provisioning Let's Encrypt cert for $domain (via certbot)"
+  # --redirect adds the HTTP-to-HTTPS 301. --nginx plugin re-applies SSL
+  # directives to our freshly-written server block on every run. If a
+  # valid cert already exists for $domain, certbot reuses it.
+  if certbot --nginx --non-interactive --redirect $email_args -d "$domain" >/tmp/spannora-certbot.log 2>&1; then
+    NGINX_HTTPS=1
+    ok "HTTPS active at https://$domain"
+  else
+    warn "certbot failed — spannora is reachable over HTTP only for now."
+    warn "Log: /tmp/spannora-certbot.log"
+    warn "Retry manually:  sudo certbot --nginx -d $domain"
   fi
 }
 
@@ -324,20 +380,28 @@ case "$PROXY_KIND" in
 EOF
     ;;
   nginx)
-    cat <<EOF
-  Open in your browser (HTTP for now):
+    if [[ "$NGINX_HTTPS" -eq 1 ]]; then
+      cat <<EOF
+  Open in your browser:
+
+      https://$DOMAIN
+
+  Let's Encrypt cert is in place. Auto-renewal is handled by the
+  certbot.timer systemd unit (runs twice daily).
+
+EOF
+    else
+      cat <<EOF
+  Open in your browser (HTTP only for now):
 
       http://$DOMAIN
 
-  To upgrade to HTTPS, run on this host:
+  HTTPS didn't come up automatically. Retry on this host:
 
-      sudo apt install -y certbot python3-certbot-nginx  # if not installed
       sudo certbot --nginx -d $DOMAIN
 
-  certbot will update $NGINX_CONF to add a 443 listener and a
-  Let's Encrypt cert. Browser will then work over https://$DOMAIN.
-
 EOF
+    fi
     ;;
   *)
     if [[ -n "$DOMAIN" ]]; then

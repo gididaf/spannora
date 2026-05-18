@@ -70,8 +70,10 @@ Open `http://localhost:7878`. The first visit redirects to `/setup`; the token i
 
 | Var | Default | Notes |
 |---|---|---|
-| `SPANNORA_DOMAIN` | `<public-ip>.sslip.io` | Hostname Caddy serves. Override with a real domain you own. |
-| `SPANNORA_NO_PROXY` | unset | Set to `1` to skip Caddy install/config entirely — bring your own proxy. |
+| `SPANNORA_DOMAIN` | `<public-ip>.sslip.io` | Hostname the reverse proxy serves. Override with a real domain you own. |
+| `SPANNORA_NO_PROXY` | unset | Set to `1` to skip both Caddy and nginx setup — bring your own proxy. |
+| `SPANNORA_NO_HTTPS` | unset | On nginx hosts, write the HTTP block but skip the certbot/Let's Encrypt step. |
+| `SPANNORA_ACME_EMAIL` | unset | Email registered with Let's Encrypt (used for renewal/breach notices). Without it, certbot registers anonymously. |
 
 ## License
 
