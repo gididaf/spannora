@@ -233,6 +233,10 @@
 
       header {
         padding: 12px 16px;
+        /* Clear iOS notch / status bar area in standalone PWA. */
+        padding-top: max(12px, env(safe-area-inset-top));
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
         border-bottom: 1px solid var(--border);
         display: flex;
         align-items: center;
@@ -321,6 +325,10 @@
         border-top: 1px solid var(--border);
         background: var(--panel);
         padding: 12px 16px;
+        /* Push above Android nav buttons / iOS home indicator in standalone PWA. */
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
         display: flex;
         gap: 8px;
       }

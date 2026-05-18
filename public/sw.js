@@ -4,14 +4,18 @@
 // We never cache API responses — chat, auth, and conversation state must
 // always hit the network so streaming and session checks stay correct.
 //
-// Bump VERSION any time the precache list or strategy changes.
+// Bump VERSION any time the precache list or strategy changes. v2 fixed a
+// nasty bug where /app.js could be precached as redirect-followed login
+// HTML when the SW installed before the user was authenticated.
 
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `spannora-${VERSION}`;
 
+// We don't precache auth-gated assets anymore: if the SW installs while
+// the user is on /login, the server replies 302 → /login for /app.js, and
+// the redirected response would poison the cache under the /app.js key.
+// Only assets that are always public belong here.
 const PRECACHE = [
-  "/",
-  "/app.js",
   "/manifest.webmanifest",
   "/icons/icon.svg",
   "/icons/icon-192.png",
@@ -21,14 +25,23 @@ const PRECACHE = [
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
-      // addAll is atomic — if any item fails the whole install rolls back.
-      // Wrap each in a Request with cache: 'reload' so we don't pick up a
-      // stale browser cache entry during install.
       cache.addAll(PRECACHE.map((url) => new Request(url, { cache: "reload" })))
     ),
   );
   self.skipWaiting();
 });
+
+// A response is safe to cache only if (a) it succeeded, (b) the browser
+// didn't follow a redirect to get it (which would mean we'd store one
+// URL's content under a *different* URL's key), and (c) it's a regular
+// same-origin response (`type: "basic"`).
+function isCacheable(req, resp) {
+  if (!resp || !resp.ok) return false;
+  if (resp.type !== "basic") return false;
+  if (resp.redirected) return false;
+  if (resp.url && resp.url !== req.url) return false;
+  return true;
+}
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
@@ -48,30 +61,31 @@ self.addEventListener("fetch", (event) => {
   // Never intercept API traffic or the service worker file itself.
   if (url.pathname.startsWith("/api/") || url.pathname === "/sw.js") return;
 
-  // Navigation requests (HTML pages) — network-first so a redeploy lands
-  // immediately, with the precached shell as a graceful offline fallback.
+  // Navigation requests (HTML pages) — network-first so redeploys land
+  // immediately, with cache as a graceful offline fallback. Use a manual
+  // redirect so a 302 → /login doesn't get cached under the original URL.
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req)
         .then((resp) => {
-          // Cache the latest HTML for offline use, but only if it's a real
-          // 200 (not a redirect / 401).
-          if (resp.ok && resp.type === "basic") {
+          if (isCacheable(req, resp)) {
             const clone = resp.clone();
             caches.open(CACHE).then((c) => c.put(req, clone));
           }
           return resp;
         })
-        .catch(() => caches.match(req).then((m) => m || caches.match("/"))),
+        .catch(() => caches.match(req).then((m) => m || Response.error())),
     );
     return;
   }
 
-  // Static assets — cache-first, refresh in the background.
+  // Static assets — cache-first, refresh in background. Same redirect
+  // guard via isCacheable() so we never cache an auth wall under an
+  // asset URL.
   event.respondWith(
     caches.match(req).then((cached) => {
       const networkFetch = fetch(req).then((resp) => {
-        if (resp.ok && resp.type === "basic") {
+        if (isCacheable(req, resp)) {
           const clone = resp.clone();
           caches.open(CACHE).then((c) => c.put(req, clone));
         }
