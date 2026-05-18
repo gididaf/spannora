@@ -8,7 +8,7 @@
 #
 # Environment overrides:
 #   SPANNORA_DOMAIN   Use this hostname instead of <public-ip>.sslip.io
-#   SPANNORA_NO_PROXY If set, skip Caddy install and config
+#   SPANNORA_NO_PROXY If set, skip all reverse-proxy install/config
 
 set -euo pipefail
 
@@ -18,6 +18,7 @@ SERVICE_NAME="spannora"
 NODE_MAJOR="20"
 CADDY_CONF="/etc/caddy/conf.d/spannora.caddy"
 CADDY_MAIN="/etc/caddy/Caddyfile"
+NGINX_CONF="/etc/nginx/conf.d/spannora.conf"
 
 say()  { printf "\033[1;36m▸\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
@@ -37,6 +38,107 @@ elif command -v dnf     >/dev/null; then PM=dnf
 elif command -v yum     >/dev/null; then PM=yum
 else PM=unknown
 fi
+
+# --- Helper: detect existing reverse proxy ---
+detect_existing_proxy() {
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    echo "nginx"; return
+  fi
+  if systemctl is-active --quiet apache2 2>/dev/null \
+     || systemctl is-active --quiet httpd 2>/dev/null; then
+    echo "apache"; return
+  fi
+  if command -v ss >/dev/null \
+     && ss -tlnp 2>/dev/null | awk '{print $4}' | grep -qE ':(80|443)$'; then
+    echo "other"; return
+  fi
+  echo ""
+}
+
+# --- Helper: install Caddy ---
+install_caddy() {
+  case "$PM" in
+    apt)
+      apt-get install -y debian-keyring debian-archive-keyring apt-transport-https gpg curl >/dev/null
+      curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        > /etc/apt/sources.list.d/caddy-stable.list
+      apt-get update -qq
+      apt-get install -y caddy
+      ;;
+    dnf|yum)
+      "$PM" install -y 'dnf-command(copr)' >/dev/null 2>&1 || true
+      "$PM" copr enable -y @caddy/caddy
+      "$PM" install -y caddy
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# --- Helper: configure Caddy for our domain ---
+configure_caddy() {
+  local domain="$1"
+  say "Configuring Caddy for $domain"
+  mkdir -p /etc/caddy/conf.d
+
+  if [[ ! -f "$CADDY_MAIN" ]]; then
+    echo 'import conf.d/*.caddy' > "$CADDY_MAIN"
+  elif ! grep -qE 'import[[:space:]]+(\./)?conf\.d/' "$CADDY_MAIN"; then
+    printf '\nimport conf.d/*.caddy\n' >> "$CADDY_MAIN"
+  fi
+
+  cat > "$CADDY_CONF" <<EOF
+${domain} {
+    reverse_proxy 127.0.0.1:7878 {
+        transport http { read_timeout 1h }
+    }
+}
+EOF
+
+  systemctl enable caddy >/dev/null 2>&1 || true
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+  ok "Caddy serving $domain → 127.0.0.1:7878"
+}
+
+# --- Helper: configure nginx for our domain (HTTP-only; HTTPS via certbot
+# step printed at the end). nginx is left in charge of TLS — Caddy isn't
+# touched on hosts that already run nginx. ---
+configure_nginx() {
+  local domain="$1"
+  say "Writing nginx config for $domain"
+  mkdir -p /etc/nginx/conf.d
+
+  cat > "$NGINX_CONF" <<EOF
+server {
+    listen 80;
+    server_name ${domain};
+
+    # spannora streams long Server-Sent Events while Claude is thinking.
+    # proxy_read_timeout 1h and disabled buffering keep responses flowing.
+    location / {
+        proxy_pass http://127.0.0.1:7878;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx
+    ok "nginx serving $domain → 127.0.0.1:7878 (HTTP — finish HTTPS step below)"
+  else
+    warn "nginx -t failed against the new config. Inspect with:  sudo nginx -t"
+    warn "Config written to $NGINX_CONF but nginx was not reloaded."
+  fi
+}
 
 # --- Node ---
 need_node=0
@@ -99,8 +201,7 @@ ok "Extracted to $INSTALL_DIR"
 
 # --- Legacy migration ---
 # Older installs used a dedicated `spannora` system user. If we find that
-# user's Claude auth and root doesn't have its own, copy it over so the
-# upgrade keeps working.
+# user's Claude auth and root doesn't have its own, copy it over.
 if [[ -d /home/spannora/.claude && ! -d /root/.claude ]]; then
   say "Migrating Claude Code auth from spannora user to /root/.claude"
   cp -r /home/spannora/.claude /root/
@@ -131,14 +232,20 @@ else
   warn "Service did not start cleanly — inspect with: journalctl -u $SERVICE_NAME -n 50"
 fi
 
-# --- Reverse proxy (Caddy + sslip.io by default) ---
+# --- Reverse proxy ---
 DOMAIN="${SPANNORA_DOMAIN:-}"
-SETUP_CADDY=1
+SETUP_PROXY=1
+PROXY_KIND=""      # "caddy" | "nginx" | "" (none)
 if [[ -n "${SPANNORA_NO_PROXY:-}" ]]; then
-  SETUP_CADDY=0
+  SETUP_PROXY=0
 fi
 
-if [[ "$SETUP_CADDY" -eq 1 && -z "$DOMAIN" ]]; then
+EXISTING_PROXY=$(detect_existing_proxy)
+[[ -n "$EXISTING_PROXY" ]] && ok "Detected existing reverse proxy: $EXISTING_PROXY"
+
+# Resolve domain (sslip.io if no override) — only useful when we're going
+# to configure a proxy ourselves.
+if [[ "$SETUP_PROXY" -eq 1 && -z "$DOMAIN" ]]; then
   say "Detecting public IPv4 for sslip.io"
   PUBLIC_IP=$(
     curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null \
@@ -153,62 +260,41 @@ if [[ "$SETUP_CADDY" -eq 1 && -z "$DOMAIN" ]]; then
   else
     warn "Couldn't auto-detect a public IPv4 address."
     warn "Set SPANNORA_DOMAIN=<your.domain> and re-run, or configure your proxy manually."
-    SETUP_CADDY=0
+    SETUP_PROXY=0
   fi
 fi
 
-if [[ "$SETUP_CADDY" -eq 1 ]]; then
-  # Install Caddy if missing.
-  if ! command -v caddy >/dev/null; then
-    say "Installing Caddy"
-    case "$PM" in
-      apt)
-        apt-get install -y debian-keyring debian-archive-keyring apt-transport-https gpg curl >/dev/null
-        curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-          | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-        curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-          > /etc/apt/sources.list.d/caddy-stable.list
-        apt-get update -qq
-        apt-get install -y caddy
-        ;;
-      dnf|yum)
-        "$PM" install -y 'dnf-command(copr)' >/dev/null 2>&1 || true
-        "$PM" copr enable -y @caddy/caddy
-        "$PM" install -y caddy
-        ;;
-      *)
-        warn "Don't know how to install Caddy on this distro. Configure your reverse proxy manually."
-        SETUP_CADDY=0
-        ;;
-    esac
-    [[ "$SETUP_CADDY" -eq 1 ]] && ok "Caddy installed"
-  else
-    ok "Caddy already installed"
-  fi
-fi
-
-if [[ "$SETUP_CADDY" -eq 1 ]]; then
-  say "Configuring Caddy for $DOMAIN"
-  mkdir -p /etc/caddy/conf.d
-
-  # Make sure /etc/caddy/Caddyfile imports our snippet dir.
-  if [[ ! -f "$CADDY_MAIN" ]]; then
-    echo 'import conf.d/*.caddy' > "$CADDY_MAIN"
-  elif ! grep -qE 'import[[:space:]]+(\./)?conf\.d/' "$CADDY_MAIN"; then
-    printf '\nimport conf.d/*.caddy\n' >> "$CADDY_MAIN"
-  fi
-
-  cat > "$CADDY_CONF" <<EOF
-${DOMAIN} {
-    reverse_proxy 127.0.0.1:7878 {
-        transport http { read_timeout 1h }
-    }
-}
-EOF
-
-  systemctl enable caddy >/dev/null 2>&1 || true
-  systemctl reload caddy 2>/dev/null || systemctl restart caddy
-  ok "Caddy serving $DOMAIN → 127.0.0.1:7878"
+# Branch on which proxy we're talking to.
+if [[ "$SETUP_PROXY" -eq 1 && -n "$DOMAIN" ]]; then
+  case "$EXISTING_PROXY" in
+    nginx)
+      configure_nginx "$DOMAIN"
+      PROXY_KIND="nginx"
+      ;;
+    apache|other)
+      warn "An existing reverse proxy ($EXISTING_PROXY) is already serving :80/:443."
+      warn "spannora's installer only auto-configures nginx and Caddy."
+      warn "Configure your proxy manually to forward $DOMAIN → 127.0.0.1:7878."
+      warn "Required: upstream read timeout >= 1h so SSE streams aren't cut off."
+      ;;
+    "")
+      if ! command -v caddy >/dev/null; then
+        say "Installing Caddy"
+        if install_caddy; then
+          ok "Caddy installed"
+        else
+          warn "Couldn't install Caddy on this distro. Configure your proxy manually."
+          SETUP_PROXY=0
+        fi
+      else
+        ok "Caddy already installed"
+      fi
+      if [[ "$SETUP_PROXY" -eq 1 ]]; then
+        configure_caddy "$DOMAIN"
+        PROXY_KIND="caddy"
+      fi
+      ;;
+  esac
 fi
 
 # --- Setup token (only meaningful before first user is created) ---
@@ -225,8 +311,9 @@ cat <<EOF
 
 EOF
 
-if [[ -n "$DOMAIN" && "$SETUP_CADDY" -eq 1 ]]; then
-  cat <<EOF
+case "$PROXY_KIND" in
+  caddy)
+    cat <<EOF
   Open in your browser:
 
       https://$DOMAIN
@@ -235,25 +322,49 @@ if [[ -n "$DOMAIN" && "$SETUP_CADDY" -eq 1 ]]; then
   ~30 seconds before the HTTPS handshake settles.
 
 EOF
-elif [[ -n "$DOMAIN" ]]; then
-  cat <<EOF
-  Configure a reverse proxy yourself, then open:
+    ;;
+  nginx)
+    cat <<EOF
+  Open in your browser (HTTP for now):
 
-      https://$DOMAIN
+      http://$DOMAIN
 
-EOF
-else
-  cat <<EOF
-  spannora is listening on 127.0.0.1:7878. Either:
+  To upgrade to HTTPS, run on this host:
 
-  - SSH-tunnel to test:
-        ssh -L 7878:127.0.0.1:7878 root@<this-host>
-        open http://localhost:7878 in your browser
-  - Or re-run with SPANNORA_DOMAIN=<your.domain>:
-        SPANNORA_DOMAIN=chat.example.com bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh)
+      sudo apt install -y certbot python3-certbot-nginx  # if not installed
+      sudo certbot --nginx -d $DOMAIN
+
+  certbot will update $NGINX_CONF to add a 443 listener and a
+  Let's Encrypt cert. Browser will then work over https://$DOMAIN.
 
 EOF
-fi
+    ;;
+  *)
+    if [[ -n "$DOMAIN" ]]; then
+      cat <<EOF
+  spannora is listening on 127.0.0.1:7878. Point a reverse proxy at it
+  for $DOMAIN, or:
+
+      ssh -L 7878:127.0.0.1:7878 root@<this-host>
+      # then http://localhost:7878 in your browser
+
+EOF
+    else
+      cat <<EOF
+  spannora is listening on 127.0.0.1:7878. To reach it from outside,
+  either tunnel:
+
+      ssh -L 7878:127.0.0.1:7878 root@<this-host>
+      open http://localhost:7878
+
+  or re-run with a domain set:
+
+      SPANNORA_DOMAIN=chat.example.com bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh)
+
+EOF
+    fi
+    ;;
+esac
 
 if [[ -n "$setup_token" ]]; then
   cat <<EOF
