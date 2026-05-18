@@ -6,6 +6,7 @@ Self-hosted web chat for [Claude Code](https://docs.claude.com/en/docs/claude-co
 - **Pretty tool cards** — diffs for edits, formatted output for bash, file previews for write, etc.
 - **Multi-thread** with SQLite persistence. Each conversation locks to a working directory and resumes via the SDK's session id.
 - **In-app auth** (single user, bcrypt, session cookies) — sets up via a one-time token printed on first start.
+- **Installable PWA** — once it's serving over HTTPS, the browser's "Install app" / "Add to home screen" turns spannora into a standalone app on desktop, Android, and iOS.
 - **Self-hosted, no cloud middleman** beyond Claude itself.
 
 ## Install (Linux + systemd)

@@ -43,6 +43,8 @@ const STATIC_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
+  ".webmanifest": "application/manifest+json",
+  ".json": "application/json",
 };
 
 // One in-flight query per conversation. Keyed by conversation_id.
@@ -495,6 +497,12 @@ function isPublicPath(method: string | undefined, p: string): boolean {
   if (method === "GET" && p === "/api/auth/status") return true;
   if (method === "POST" && p === "/api/auth/setup") return true;
   if (method === "POST" && p === "/api/auth/login") return true;
+  // PWA assets — the browser fetches these even on /login (before auth), and
+  // the service worker registers from any page. Keep them public so install
+  // works regardless of session state.
+  if (method === "GET" && p === "/sw.js") return true;
+  if (method === "GET" && p === "/manifest.webmanifest") return true;
+  if (method === "GET" && p.startsWith("/icons/")) return true;
   return false;
 }
 
