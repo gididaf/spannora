@@ -114,12 +114,19 @@ systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 systemctl restart "$SERVICE_NAME"
 
-sleep 1
+sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
   ok "Service running (listening on 127.0.0.1:7878)"
 else
   warn "Service did not start cleanly — inspect with: journalctl -u $SERVICE_NAME -n 50"
 fi
+
+# Try to extract the one-time setup token from the service log so we can
+# display it directly. Token format is 32-char base64url (24 random bytes).
+# Only present when no users exist yet — second-run upgrades have none.
+setup_token=$(journalctl -u "$SERVICE_NAME" --no-pager -n 200 2>/dev/null \
+  | grep -oE '[A-Za-z0-9_-]{32}' \
+  | tail -1 || true)
 
 cat <<EOF
 
@@ -133,29 +140,58 @@ cat <<EOF
 
        sudo -iu $SERVICE_USER node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
 
-     This launches Claude Code's REPL (bundled inside the SDK — no extra
-     install needed). Inside the REPL:
+     Inside the REPL:  /login → URL → sign in → /exit
+     Credentials land in /home/$SERVICE_USER/.claude/.
 
-       /login    → opens a URL in your browser, sign in to claude.ai
-       /exit     → back to the shell
+  2. Reverse proxy. Paste this prompt into your own Claude Code session
+     (laptop or wherever — Claude needs SSH access to this host, or you
+     can run it directly on this host) and let it handle the config:
 
-     Credentials land in /home/$SERVICE_USER/.claude/. The SDK reads them
-     automatically on every request.
+       ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+       spannora is installed and running on this host as a systemd
+       service, listening on 127.0.0.1:7878. Please set up a reverse
+       proxy for it, terminating HTTPS.
 
-  2. Find the one-time setup token in the service log:
+       - Domain: <REPLACE_WITH_YOUR_DOMAIN>
+       - Upstream: 127.0.0.1:7878
+       - Detect Caddy, nginx, or Apache. If none, recommend Caddy and
+         pause for me to install it.
+       - Critical: upstream read timeout >= 1 hour. spannora streams
+         long Server-Sent Events while Claude is thinking; default
+         timeouts cut responses off mid-reply.
+       - Reload the proxy and verify with
+             curl -fsSI https://<DOMAIN>
+         that it returns a 200 or 302.
+       ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
-       journalctl -u $SERVICE_NAME -n 50 | grep -A6 'setup required'
+     Or do it manually — Caddy snippet (drop into /etc/caddy/Caddyfile):
 
-  3. Reverse-proxy with Caddy (replace the hostname, then reload Caddy):
+         <DOMAIN> {
+             reverse_proxy 127.0.0.1:7878 {
+                 transport http { read_timeout 1h }
+             }
+         }
+EOF
 
-       your-domain.example.com {
-           reverse_proxy 127.0.0.1:7878 {
-               transport http { read_timeout 1h }
-           }
-       }
+if [[ -n "$setup_token" ]]; then
+  cat <<EOF
 
-  4. Visit https://your-domain.example.com — paste the token,
-     pick a username + password, and you're chatting.
+  3. One-time setup token (single-use, regenerated on service restart):
+
+         $setup_token
+
+     Visit https://<DOMAIN> once the proxy is up. Paste this token on the
+     setup page, choose a username + password, and you're chatting.
+EOF
+else
+  cat <<EOF
+
+  3. This host already has a spannora user account — no setup token needed.
+     Visit https://<DOMAIN> once the proxy is up and sign in.
+EOF
+fi
+
+cat <<EOF
 
   Re-run this installer any time to upgrade. Data and credentials persist.
 
