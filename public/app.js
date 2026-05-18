@@ -1,3 +1,17 @@
+// Android Chrome PWA standalone + viewport-fit=cover renders the WebView
+// under the 3-button nav, and reports `env(safe-area-inset-bottom)` as 0
+// (the inset is only non-zero for gesture-nav). `100dvh` therefore extends
+// behind the nav, hiding our footer. visualViewport.height excludes opaque
+// system bars, so use that for the real usable height; iOS standalone
+// matches the layout viewport, so this is a no-op there.
+function syncAppHeight() {
+  const h = window.visualViewport?.height ?? window.innerHeight;
+  document.documentElement.style.setProperty("--app-height", `${h}px`);
+}
+syncAppHeight();
+window.visualViewport?.addEventListener("resize", syncAppHeight);
+window.addEventListener("orientationchange", syncAppHeight);
+
 // === DOM refs ===
 const transcript = document.getElementById("transcript");
 const promptInput = document.getElementById("prompt");

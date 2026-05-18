@@ -8,7 +8,7 @@
 // nasty bug where /app.js could be precached as redirect-followed login
 // HTML when the SW installed before the user was authenticated.
 
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE = `spannora-${VERSION}`;
 
 // We don't precache auth-gated assets anymore: if the SW installs while

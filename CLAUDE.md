@@ -101,6 +101,7 @@ Single user, in-app. `bcryptjs` (~12 rounds), session cookies (`HttpOnly`, `Same
 - `isCacheable()` in the SW rejects redirected responses, non-200s, and responses whose `resp.url !== req.url`. Belt and braces against the above.
 - API paths (`/api/*`) are never intercepted by the SW — chat streaming, auth, and conversation state must always hit live.
 - Safe-area insets: header and footer use `padding: max(<original>, env(safe-area-inset-*))` so Android nav buttons and the iOS notch don't cover UI. `viewport-fit=cover` must be in the viewport meta for these env vars to be non-zero.
+- Android 3-button nav reports `env(safe-area-inset-bottom): 0` (only gesture-nav reports the home-indicator height), so the safe-area padding alone isn't enough — `100dvh` extends behind the opaque nav and hides the footer. `app.js`'s `syncAppHeight()` reads `visualViewport.height` (which excludes opaque system bars) into a `--app-height` CSS var; `body`, `.main-pane`, and the fullscreen `.picker-card` use `var(--app-height, 100dvh)` instead of raw `100dvh`. Side benefit: keyboard-up shrinks the body so the input stays visible. Tested on Pixel 10 Pro XL.
 
 ## shtum + GitHub API
 
