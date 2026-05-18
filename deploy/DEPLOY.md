@@ -40,21 +40,11 @@ This installs `@anthropic-ai/claude-agent-sdk`, `better-sqlite3` (native — nee
 
 The Agent SDK ships its own bundled CLI at `node_modules/@anthropic-ai/claude-agent-sdk/cli.js` — no separate Claude Code install is needed. It just needs credentials in `~/.claude/` for the `spannora` user.
 
-**Interactive REPL** (easiest if you can SSH in):
-
 ```bash
 sudo -iu spannora node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
 ```
 
-Inside the REPL: type `/login`, follow the OAuth URL in a browser, then `/exit`.
-
-**Long-lived headless token** (subscription accounts, scripts, CI):
-
-```bash
-sudo -iu spannora node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js setup-token
-```
-
-Either way, tokens land in `/home/spannora/.claude/`. The SDK reads them automatically on every request.
+Inside the REPL: type `/login`, follow the OAuth URL in a browser, then `/exit`. Credentials land in `/home/spannora/.claude/` and the SDK reads them automatically on every request.
 
 ## 5. Install the systemd unit
 

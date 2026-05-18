@@ -129,22 +129,18 @@ cat <<EOF
 
   Next steps:
 
-  1. Authenticate Claude Code as the service user (once).
-
-     The Agent SDK ships its own bundled CLI at:
-       /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
-
-     Easiest path — interactive REPL:
+  1. Authenticate Claude Code as the service user (once):
 
        sudo -iu $SERVICE_USER node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
-       # then inside the REPL:  /login  → follow the URL  →  /exit
 
-     OR for a long-lived headless token (subscription accounts):
+     This launches Claude Code's REPL (bundled inside the SDK — no extra
+     install needed). Inside the REPL:
 
-       sudo -iu $SERVICE_USER node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js setup-token
+       /login    → opens a URL in your browser, sign in to claude.ai
+       /exit     → back to the shell
 
-     Tokens land in /home/$SERVICE_USER/.claude/ — the SDK reads them from
-     there on every request.
+     Credentials land in /home/$SERVICE_USER/.claude/. The SDK reads them
+     automatically on every request.
 
   2. Find the one-time setup token in the service log:
 
