@@ -191,7 +191,7 @@ settings     keyPath="key"
 
 **Registration flow** (`packages/hub/src/addInstance.js`): paste URL + creds → `POST <base_url>/api/auth/token` → store `{token, label, color}` in `instances`. Mixed-content check first (https hub + http spannora = inline error, no request sent).
 
-**Switcher UX** (`packages/hub/src/sidebar.js`): permanent left rail with one chip per instance. Active chip has a left-edge accent. HTML5 DnD reorders chips and persists via `reorderInstances()`. Right-click/long-press opens instance settings (relabel, recolor, remove). Removing only forgets the instance locally — the bearer token on the server is **not** revoked. To kill the token, go to the server's same-origin account modal and revoke the matching session.
+**Switcher UX** (`packages/hub/src/sidebar.js`): left rail with one chip per instance. On desktop it's a permanent 56px strip; on `≤768px` it's hidden by default and slides in *together with* the conv drawer under the same `body.sidebar-open` class — one tap on `☰` reveals both rail and conv list. Active chip has a left-edge accent. HTML5 DnD reorders chips and persists via `reorderInstances()`. Right-click/long-press opens instance settings (relabel, recolor, remove). Removing only forgets the instance locally — the bearer token on the server is **not** revoked. To kill the token, go to the server's same-origin account modal and revoke the matching session.
 
 **Chat view** (`packages/hub/src/chatView.js`): identical to the in-server PWA because both consume `@spannora/shared`. The differences are the injected `askContext.submitAnswer` (uses the bearer-authed `SpannoraClient`) and the SSE source (uses `client.startChat`). On instance switch: abort the in-flight stream, swap the client, restore the hash-routed conversation.
 
@@ -200,7 +200,7 @@ settings     keyPath="key"
 - **`scope` and `start_url`** in `manifest.webmanifest` are relative `./` so the same hub works both at `/app/` (production at spannora.dev) and `/` (local dev). `id: "spannora-hub"` is set so the PWA install identity stays stable across future origin moves.
 - **SW cache name** is `spannora-hub-v*` — namespaced so the hub PWA and any per-server spannora PWA can coexist on the same device without cache collision.
 - **Never intercept cross-origin requests** in the SW. The fetch handler bails on `url.origin !== self.location.origin` so SSE streaming + bearer auth always hit live.
-- **Mobile drawer math**: the conv sidebar is `position: fixed; left: 56px; width: calc(80% - 56px)`. Closed transform is `translateX(calc(-100% - 56px))` — translating by just `-100%` or `-110%` leaves the drawer's right edge overlapping the rail (the `left: 56px` offset doesn't get subtracted by % translates).
+- **Mobile drawer math** (`≤768px`): both the workspace rail *and* the conv sidebar are `position: fixed` and slide as a unit under `body.sidebar-open`. Rail is at `left: 0; width: 56px` with closed transform `translateX(-56px)`. Conv sidebar is at `left: 56px; width: calc(80% - 56px)` with closed transform `translateX(calc(-100% - 56px))` — the `-56px` term shifts the drawer past its own `left: 56px` offset (which % translates don't subtract), so its right edge ends flush at viewport `x=0` when closed. Backdrop spans the full viewport (no `left: 56px` carve-out) since neither the rail nor the sidebar is permanent on mobile.
 - **`localhost` vs `127.0.0.1`** — see CORS section. The hub's `Origin` header is whatever the user typed in the address bar.
 
 ## PWA gotchas
