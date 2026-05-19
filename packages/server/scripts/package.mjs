@@ -31,9 +31,30 @@ function run(cmd, opts = {}) {
 }
 
 function copyTree(src, dest) {
-  // dereference: true so that public/shared (symlink → ../../shared/src)
-  // is staged as real files inside the tarball.
+  // Note: Node's `dereference: true` on cpSync only follows the source root
+  // itself, not nested symlinks. public/shared (symlink → ../../shared/src)
+  // needs to be handled explicitly after this — see stageSharedModules().
   fs.cpSync(src, dest, { recursive: true, dereference: true });
+}
+
+// Replace the staged `public/shared` symlink with real files from
+// packages/shared/src/. The dev-time symlink is great for hot-reload but
+// would break on the target machine (it points at the build host's path).
+function stageSharedModules(stagedPublicDir) {
+  const staged = path.join(stagedPublicDir, "shared");
+  const real = path.join(repoRoot, "packages", "shared", "src");
+  if (!fs.existsSync(real)) {
+    throw new Error(`@spannora/shared missing at ${real}`);
+  }
+  // Remove whatever cpSync left (symlink or stale dir).
+  if (fs.existsSync(staged) || fs.lstatSync(staged, { throwIfNoEntry: false })) {
+    fs.rmSync(staged, { recursive: true, force: true });
+  }
+  fs.mkdirSync(staged);
+  for (const entry of fs.readdirSync(real)) {
+    fs.copyFileSync(path.join(real, entry), path.join(staged, entry));
+  }
+  console.log(`  + public/shared (${fs.readdirSync(staged).length} files)`);
 }
 
 // 1. Set up staging dirs and clean any previous tarball.
@@ -57,6 +78,9 @@ for (const item of treeItems) {
   copyTree(src, path.join(stageRoot, item));
   console.log(`  + ${item}`);
 }
+
+// 3b. Dereference the public/shared symlink into real files.
+stageSharedModules(path.join(stageRoot, "public"));
 
 // 4. Stage package.json: server's package.json with the unified version stamped in.
 const stagedPkg = { ...serverPkg, version };
