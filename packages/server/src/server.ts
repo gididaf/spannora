@@ -656,7 +656,12 @@ const server = http.createServer((req, res) => {
 initAuth();
 
 server.listen(PORT, HOST, () => {
-  log.info("server listening", { host: HOST, port: PORT });
+  // `0.0.0.0` and `::` mean "all interfaces" — show localhost in the
+  // banner since that's the URL a dev hitting `npm run dev` would open.
+  const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;
+  const url = `http://${displayHost}:${PORT}`;
+  log.info("server listening", { host: HOST, port: PORT, url });
+  process.stderr.write(`\n  spannora → ${url}\n\n`);
 });
 
 startRetention();
