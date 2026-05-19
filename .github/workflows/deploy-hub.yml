@@ -1,0 +1,59 @@
+# Publish the hub PWA to GitHub Pages.
+#
+# Trigger: any tag matching `v*` (so cutting a server release also ships
+# the matching hub). Also exposed via workflow_dispatch so you can
+# re-deploy the current main without bumping a tag.
+#
+# Output: https://<owner>.github.io/<repo>/spannora/
+# (Pages source must be set to "GitHub Actions" in the repo settings.)
+#
+# The hub package keeps `packages/hub/shared` as a symlink to
+# `packages/shared/src` for local dev. `cp -rL` follows the symlink during
+# staging so the deployed artifact contains real files — same trick the
+# server tarball uses (scripts/package.mjs passes dereference: true).
+
+name: Deploy hub to GitHub Pages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage hub site
+        run: |
+          mkdir -p site/spannora
+          # -L dereferences the packages/hub/shared symlink so the deployed
+          # /spannora/shared/ contains the real @spannora/shared modules.
+          cp -rL packages/hub/. site/spannora/
+          # Sanity check: shared modules must be real files, not a dangling
+          # symlink. If this fails, the symlink wasn't followed.
+          test -f site/spannora/shared/index.js
+          test -f site/spannora/shared/sse.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
