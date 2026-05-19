@@ -6,9 +6,12 @@
 //
 // Bump VERSION any time the precache list or strategy changes. v2 fixed a
 // nasty bug where /app.js could be precached as redirect-followed login
-// HTML when the SW installed before the user was authenticated.
+// HTML when the SW installed before the user was authenticated. v4 switched
+// /app.js to <script type="module"> and split the chat rendering into
+// /shared/*.js modules — old caches need to be evicted so the cache-first
+// path doesn't serve a stale non-module app.js.
 
-const VERSION = "v3";
+const VERSION = "v4";
 const CACHE = `spannora-${VERSION}`;
 
 // We don't precache auth-gated assets anymore: if the SW installs while

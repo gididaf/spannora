@@ -1,3 +1,16 @@
+// spannora — in-server PWA. Same-origin only; uses cookie sessions and
+// apiFetch (401 → /login). Chat rendering + SSE + tool cards now live in
+// @spannora/shared, served at /shared/*.js by the dev server (symlink)
+// and at /opt/spannora/public/shared/*.js on deployed installs (bundled
+// by scripts/package.mjs at packaging time).
+
+import {
+  streamSse,
+  renderSdkMessage,
+  escapeHtml,
+  makeTextBubble,
+} from "/shared/index.js";
+
 // Android Chrome PWA standalone + viewport-fit=cover renders the WebView
 // under the 3-button nav, and reports `env(safe-area-inset-bottom)` as 0
 // (the inset is only non-zero for gesture-nav). `100dvh` therefore extends
@@ -64,6 +77,39 @@ const toolCards = new Map();
 // (not yet answered, denied, or aborted). While non-empty, the main
 // prompt textarea is locked so the user can only interact with the form.
 const openAsks = new Set();
+
+// Context passed to @spannora/shared modules. Bound to this page's
+// transcript element, this page's toolCards Map, and a same-origin
+// askContext that uses apiFetch + the active conversation id.
+const renderCtx = {
+  transcript,
+  toolCards,
+  askContext: {
+    async submitAnswer(toolUseId, answers) {
+      const convId = state.current?.id;
+      if (!convId) throw new Error("No active conversation.");
+      const res = await apiFetch(
+        `/api/chat/${encodeURIComponent(convId)}/answer`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool_use_id: toolUseId, answers }),
+        },
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `HTTP ${res.status}`);
+      }
+    },
+    onOpen(toolUseId) {
+      openAsks.add(toolUseId);
+      applyPromptState();
+    },
+    onClosed(toolUseId) {
+      if (openAsks.delete(toolUseId)) applyPromptState();
+    },
+  },
+};
 
 // === Picker modal refs ===
 const pickerEl = document.getElementById("picker");
@@ -548,10 +594,6 @@ function flashMkdirError(message) {
   }, 2500);
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
 // === Transcript helpers ===
 function clearTranscript() {
   transcript.innerHTML = "";
@@ -572,13 +614,6 @@ function append(cls, text) {
   return el;
 }
 
-function appendNode(node) {
-  const empty = transcript.querySelector(".empty-state");
-  if (empty) empty.remove();
-  transcript.appendChild(node);
-  transcript.scrollTop = transcript.scrollHeight;
-}
-
 function hydrateMessages(messages) {
   for (const row of messages) {
     let content;
@@ -587,781 +622,8 @@ function hydrateMessages(messages) {
     if (row.role === "prompt") {
       append("user", content.text || "");
     } else if (row.role === "sdk") {
-      renderSdkMessage(content);
+      renderSdkMessage(content, renderCtx);
     }
-  }
-}
-
-// === SDK message rendering ===
-function summarizeToolInput(input) {
-  if (!input || typeof input !== "object") return "";
-  const preferred = [
-    "file_path", "filePath", "command", "pattern", "url",
-    "query", "path", "prompt", "description", "name",
-  ];
-  for (const key of preferred) {
-    if (typeof input[key] === "string") return input[key];
-  }
-  for (const val of Object.values(input)) {
-    if (typeof val === "string") return val;
-  }
-  return JSON.stringify(input);
-}
-
-function stringifyContent(content) {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => (typeof c === "string" ? c : c?.text ?? JSON.stringify(c)))
-      .join("\n");
-  }
-  if (content == null) return "";
-  return JSON.stringify(content, null, 2);
-}
-
-// === Phase 2b — pretty tool renderers ===
-
-let hljsPromise = null;
-function loadHljs() {
-  if (window.hljs) return Promise.resolve(window.hljs);
-  if (hljsPromise) return hljsPromise;
-  hljsPromise = new Promise((resolve, reject) => {
-    const css = document.createElement("link");
-    css.rel = "stylesheet";
-    css.href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css";
-    document.head.appendChild(css);
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js";
-    s.onload = () => resolve(window.hljs);
-    s.onerror = (e) => { hljsPromise = null; reject(e); };
-    document.head.appendChild(s);
-  });
-  return hljsPromise;
-}
-
-const EXT_LANG = {
-  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
-  mjs: "javascript", cjs: "javascript",
-  json: "json", html: "xml", htm: "xml", xml: "xml", svg: "xml",
-  css: "css", scss: "scss", sass: "scss", less: "less",
-  py: "python", rb: "ruby", go: "go", rs: "rust", java: "java",
-  c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp", cs: "csharp",
-  swift: "swift", kt: "kotlin", php: "php",
-  sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
-  yml: "yaml", yaml: "yaml", toml: "ini", ini: "ini", env: "ini",
-  md: "markdown", markdown: "markdown",
-  sql: "sql", lua: "lua", dart: "dart", vue: "xml",
-  dockerfile: "dockerfile",
-};
-
-function langForPath(filePath) {
-  if (typeof filePath !== "string") return "";
-  const base = filePath.split("/").pop() || "";
-  if (/^Dockerfile/i.test(base)) return "dockerfile";
-  const m = base.match(/\.([a-zA-Z0-9]+)$/);
-  return m ? (EXT_LANG[m[1].toLowerCase()] || "") : "";
-}
-
-function highlightInto(el, code, lang) {
-  el.textContent = code;
-  loadHljs().then((hljs) => {
-    if (!hljs || !el.isConnected) return;
-    try {
-      const result = lang && hljs.getLanguage(lang)
-        ? hljs.highlight(code, { language: lang, ignoreIllegals: true })
-        : hljs.highlightAuto(code);
-      el.innerHTML = result.value;
-      el.classList.add("hljs");
-    } catch {}
-  }).catch(() => {});
-}
-
-function lineDiff(a, b) {
-  const aLines = (a ?? "").split("\n");
-  const bLines = (b ?? "").split("\n");
-  const m = aLines.length;
-  const n = bLines.length;
-  const CAP = 4000;
-  if (m > CAP || n > CAP) {
-    return [
-      ...aLines.map((t) => ({ type: "del", text: t })),
-      ...bLines.map((t) => ({ type: "add", text: t })),
-    ];
-  }
-  const dp = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      if (aLines[i] === bLines[j]) dp[i][j] = dp[i + 1][j + 1] + 1;
-      else dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-  const result = [];
-  let i = 0, j = 0;
-  while (i < m && j < n) {
-    if (aLines[i] === bLines[j]) { result.push({ type: "eq", text: aLines[i] }); i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) { result.push({ type: "del", text: aLines[i] }); i++; }
-    else { result.push({ type: "add", text: bLines[j] }); j++; }
-  }
-  while (i < m) result.push({ type: "del", text: aLines[i++] });
-  while (j < n) result.push({ type: "add", text: bLines[j++] });
-  return result;
-}
-
-function diffBlock(oldStr, newStr) {
-  const block = document.createElement("div");
-  block.className = "diff-block";
-  for (const ln of lineDiff(oldStr, newStr)) {
-    const row = document.createElement("div");
-    row.className = `diff-line ${ln.type}`;
-    row.textContent = ln.text;
-    block.appendChild(row);
-  }
-  if (!block.childNodes.length) {
-    const empty = document.createElement("div");
-    empty.className = "diff-line eq";
-    empty.textContent = "(no changes)";
-    block.appendChild(empty);
-  }
-  return block;
-}
-
-function fileMeta(pathStr, extra) {
-  const wrap = document.createElement("div");
-  wrap.className = "file-meta";
-  const p = document.createElement("span");
-  p.className = "path";
-  p.textContent = pathStr || "(no path)";
-  wrap.appendChild(p);
-  if (extra) {
-    const e = document.createElement("span");
-    e.className = "extra";
-    e.textContent = extra;
-    wrap.appendChild(e);
-  }
-  return wrap;
-}
-
-function sectionLabel(text) {
-  const l = document.createElement("div");
-  l.className = "tool-section-label";
-  l.textContent = text;
-  return l;
-}
-
-function resultList(items) {
-  const list = document.createElement("div");
-  list.className = "result-list";
-  if (!items.length) {
-    const empty = document.createElement("div");
-    empty.className = "result-empty";
-    empty.textContent = "(no results)";
-    list.appendChild(empty);
-    return list;
-  }
-  for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "result-item";
-    row.textContent = item;
-    list.appendChild(row);
-  }
-  return list;
-}
-
-function errorPane(content) {
-  const pre = document.createElement("pre");
-  pre.className = "tool-error";
-  pre.textContent = stringifyContent(content) || "(error)";
-  return pre;
-}
-
-function renderEdit(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-edit";
-  const extra = input.replace_all ? "replace all" : "";
-  wrap.appendChild(fileMeta(input.file_path, extra));
-  wrap.appendChild(diffBlock(input.old_string, input.new_string));
-  if (isError) wrap.appendChild(errorPane(content));
-  return wrap;
-}
-
-function renderMultiEdit(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-multiedit";
-  const edits = Array.isArray(input.edits) ? input.edits : [];
-  wrap.appendChild(fileMeta(input.file_path, `${edits.length} edit${edits.length === 1 ? "" : "s"}`));
-  edits.forEach((edit, idx) => {
-    wrap.appendChild(sectionLabel(`Edit ${idx + 1}${edit.replace_all ? " · replace all" : ""}`));
-    wrap.appendChild(diffBlock(edit.old_string, edit.new_string));
-  });
-  if (isError) wrap.appendChild(errorPane(content));
-  return wrap;
-}
-
-function renderWrite(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-write";
-  const text = typeof input.content === "string" ? input.content : "";
-  const lineCount = text ? text.split("\n").length : 0;
-  wrap.appendChild(fileMeta(input.file_path, `${lineCount} line${lineCount === 1 ? "" : "s"} · ${text.length} char${text.length === 1 ? "" : "s"}`));
-  const code = document.createElement("pre");
-  code.className = "code-block";
-  highlightInto(code, text, langForPath(input.file_path));
-  wrap.appendChild(code);
-  if (isError) wrap.appendChild(errorPane(content));
-  return wrap;
-}
-
-function renderBash(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-bash";
-  const cmd = document.createElement("pre");
-  cmd.className = "bash-cmd";
-  cmd.textContent = `$ ${input.command || ""}`;
-  wrap.appendChild(cmd);
-  if (input.description) {
-    const desc = document.createElement("div");
-    desc.className = "bash-desc";
-    desc.textContent = input.description;
-    wrap.appendChild(desc);
-  }
-  const out = document.createElement("pre");
-  out.className = "bash-output" + (isError ? " err" : "");
-  out.textContent = stringifyContent(content) || "(no output)";
-  wrap.appendChild(out);
-  const status = document.createElement("div");
-  status.className = "bash-status " + (isError ? "err" : "ok");
-  status.textContent = isError ? "✗ non-zero exit" : "✓ exit 0";
-  wrap.appendChild(status);
-  return wrap;
-}
-
-function renderRead(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-read";
-  const text = stringifyContent(content);
-  const lineCount = text ? text.split("\n").length : 0;
-  const extra = [];
-  if (input.offset) extra.push(`offset ${input.offset}`);
-  if (input.limit) extra.push(`limit ${input.limit}`);
-  extra.push(`${lineCount} line${lineCount === 1 ? "" : "s"}`);
-  wrap.appendChild(fileMeta(input.file_path, extra.join(" · ")));
-  if (isError) { wrap.appendChild(errorPane(content)); return wrap; }
-  const pre = document.createElement("pre");
-  pre.className = "read-content";
-  pre.textContent = text || "(empty)";
-  wrap.appendChild(pre);
-  return wrap;
-}
-
-function renderGlob(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-glob";
-  const text = stringifyContent(content);
-  const items = text ? text.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-  const extra = [`pattern: ${input.pattern ?? "(none)"}`];
-  if (input.path) extra.push(`in ${input.path}`);
-  extra.push(`${items.length} match${items.length === 1 ? "" : "es"}`);
-  const meta = document.createElement("div");
-  meta.className = "file-meta";
-  meta.textContent = extra.join(" · ");
-  wrap.appendChild(meta);
-  if (isError) { wrap.appendChild(errorPane(content)); return wrap; }
-  wrap.appendChild(resultList(items));
-  return wrap;
-}
-
-function renderGrep(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-grep";
-  const text = stringifyContent(content);
-  const lines = text ? text.split("\n").filter((s) => s.length > 0) : [];
-  const extra = [`pattern: ${input.pattern ?? "(none)"}`];
-  if (input.path) extra.push(`in ${input.path}`);
-  if (input.glob) extra.push(`glob: ${input.glob}`);
-  if (input.output_mode) extra.push(input.output_mode);
-  extra.push(`${lines.length} result${lines.length === 1 ? "" : "s"}`);
-  const meta = document.createElement("div");
-  meta.className = "file-meta";
-  meta.textContent = extra.join(" · ");
-  wrap.appendChild(meta);
-  if (isError) { wrap.appendChild(errorPane(content)); return wrap; }
-  wrap.appendChild(resultList(lines));
-  return wrap;
-}
-
-function renderAskUserQuestion(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-aq";
-
-  // The questions are on the original tool_use input. The answers ride
-  // back inside the tool_result content as a flat string the SDK builds
-  // in mapToolResultToToolResultBlockParam:
-  //   `User has answered your questions: "Q1"="A1", "Q2"="A2". You can now…`
-  // Parse "X"="Y" pairs out of it.
-  let answers = {};
-  const questions = Array.isArray(input?.questions) ? input.questions : [];
-  const raw = stringifyContent(content);
-  const re = /"((?:[^"\\]|\\.)*)"=\s*"((?:[^"\\]|\\.)*)"/g;
-  let m;
-  while ((m = re.exec(raw)) !== null) {
-    answers[m[1]] = m[2];
-  }
-  // The assistant input may also carry answers directly (e.g. if a future
-  // SDK echoes them there). Prefer those if present.
-  if (input && typeof input === "object" && input.answers && typeof input.answers === "object") {
-    answers = input.answers;
-  }
-
-  for (const q of questions) {
-    const qWrap = document.createElement("div");
-    qWrap.className = "aq-result-q";
-    const head = document.createElement("div");
-    head.className = "aq-result-head";
-    const chip = document.createElement("span");
-    chip.className = "aq-chip";
-    chip.textContent = q.header || "Q";
-    const title = document.createElement("span");
-    title.className = "aq-result-title";
-    title.textContent = q.question || "";
-    head.append(chip, title);
-    qWrap.appendChild(head);
-    const ans = document.createElement("div");
-    ans.className = "aq-result-answer";
-    ans.textContent = answers[q.question] ?? "(no answer)";
-    qWrap.appendChild(ans);
-    wrap.appendChild(qWrap);
-  }
-  if (isError) wrap.appendChild(errorPane(content));
-  return wrap;
-}
-
-const renderers = {
-  Edit: renderEdit,
-  MultiEdit: renderMultiEdit,
-  Write: renderWrite,
-  Bash: renderBash,
-  Read: renderRead,
-  Glob: renderGlob,
-  Grep: renderGrep,
-  AskUserQuestion: renderAskUserQuestion,
-};
-
-function renderToolBody(name, input, content, isError) {
-  const fn = renderers[name];
-  if (!fn) return null;
-  try { return fn(input || {}, content, isError); }
-  catch (e) { console.warn(`[spannora] ${name} renderer threw`, e); return null; }
-}
-
-function renderGeneric(input, content, isError) {
-  const wrap = document.createElement("div");
-  wrap.className = "render-generic";
-  wrap.appendChild(sectionLabel("Input"));
-  const inPre = document.createElement("pre");
-  inPre.className = "tool-section";
-  inPre.textContent = JSON.stringify(input ?? {}, null, 2);
-  wrap.appendChild(inPre);
-  wrap.appendChild(sectionLabel("Output"));
-  const outText = stringifyContent(content);
-  const outPre = document.createElement("pre");
-  outPre.className = "tool-section" + (outText ? "" : " empty");
-  outPre.textContent = outText || "(empty)";
-  wrap.appendChild(outPre);
-  if (isError) wrap.appendChild(errorPane(content));
-  return wrap;
-}
-
-function rawToggle(input, content, isError) {
-  const det = document.createElement("details");
-  det.className = "raw-toggle";
-  const sum = document.createElement("summary");
-  sum.textContent = "Show raw";
-  det.appendChild(sum);
-  const pre = document.createElement("pre");
-  pre.className = "raw-pane";
-  pre.textContent = JSON.stringify({ input: input ?? {}, content, is_error: !!isError }, null, 2);
-  det.appendChild(pre);
-  return det;
-}
-
-function makeToolCard(block) {
-  const card = document.createElement("details");
-  card.className = "tool-card";
-  // Auto-expand AskUserQuestion so the form is visible without a click.
-  if (block.name === "AskUserQuestion") card.open = true;
-
-  const header = document.createElement("summary");
-  header.className = "tool-header";
-
-  const arrow = document.createElement("span");
-  arrow.className = "tool-arrow";
-  arrow.textContent = "▶";
-
-  const nameEl = document.createElement("span");
-  nameEl.className = "tool-name";
-  nameEl.textContent = block.name || "(tool)";
-
-  const summaryEl = document.createElement("span");
-  summaryEl.className = "tool-summary";
-  summaryEl.textContent = block.name === "AskUserQuestion"
-    ? `${(block.input?.questions ?? []).length} question${(block.input?.questions ?? []).length === 1 ? "" : "s"}`
-    : summarizeToolInput(block.input);
-
-  const statusEl = document.createElement("span");
-  statusEl.className = "tool-status pending";
-  statusEl.textContent = "…";
-
-  header.append(arrow, nameEl, summaryEl, statusEl);
-  card.appendChild(header);
-
-  const body = document.createElement("div");
-  body.className = "tool-body";
-  if (block.name === "AskUserQuestion" && block.id) {
-    body.appendChild(makeAskQuestionForm(block.id, block.input || {}));
-  } else {
-    const waiting = document.createElement("div");
-    waiting.className = "tool-waiting";
-    waiting.textContent = "(waiting for result…)";
-    body.appendChild(waiting);
-  }
-  card.appendChild(body);
-
-  if (block.id) toolCards.set(block.id, {
-    card, statusEl, body,
-    name: block.name,
-    input: block.input,
-  });
-  return card;
-}
-
-function makeAskQuestionForm(toolUseId, input) {
-  const form = document.createElement("div");
-  form.className = "aq-form";
-
-  openAsks.add(toolUseId);
-  applyPromptState();
-
-  const questions = Array.isArray(input.questions) ? input.questions : [];
-  // Per-question selection state. For single-select we track an index;
-  // for multi-select we track a Set of indices. Free-text "Other" is
-  // tracked separately and always allowed (the SDK doesn't include an
-  // "Other" option in `options` — it expects the host to add one).
-  const qState = questions.map((q) => ({
-    selectedIdx: null,         // single-select: index of picked option
-    selectedIdxs: new Set(),   // multi-select: indices of picked options
-    otherSelected: false,      // is the "Other" radio/checkbox checked?
-    otherText: "",
-    multi: !!q.multiSelect,
-  }));
-
-  questions.forEach((q, qi) => {
-    const qWrap = document.createElement("div");
-    qWrap.className = "aq-question";
-
-    const headerRow = document.createElement("div");
-    headerRow.className = "aq-question-header";
-    const chip = document.createElement("span");
-    chip.className = "aq-chip";
-    chip.textContent = q.header || `Q${qi + 1}`;
-    if (q.multiSelect) {
-      const multi = document.createElement("span");
-      multi.className = "aq-multi-hint";
-      multi.textContent = "multi-select";
-      headerRow.append(chip, multi);
-    } else {
-      headerRow.appendChild(chip);
-    }
-    qWrap.appendChild(headerRow);
-
-    const titleEl = document.createElement("div");
-    titleEl.className = "aq-title";
-    titleEl.textContent = q.question || "";
-    qWrap.appendChild(titleEl);
-
-    const groupName = `aq-${toolUseId}-${qi}`;
-    let otherCheck;  // declared early so option handlers can clear it
-
-    const opts = Array.isArray(q.options) ? q.options : [];
-    opts.forEach((opt, oi) => {
-      const row = document.createElement("label");
-      row.className = "aq-option";
-      const inp = document.createElement("input");
-      inp.type = q.multiSelect ? "checkbox" : "radio";
-      inp.name = groupName;
-      inp.value = String(oi);
-      inp.addEventListener("change", () => {
-        if (q.multiSelect) {
-          if (inp.checked) qState[qi].selectedIdxs.add(oi);
-          else qState[qi].selectedIdxs.delete(oi);
-        } else {
-          qState[qi].selectedIdx = oi;
-          // Browser already unchecked the Other radio in the same group;
-          // mirror that in state.
-          qState[qi].otherSelected = false;
-        }
-      });
-      const txt = document.createElement("span");
-      txt.className = "aq-option-text";
-      const label = document.createElement("span");
-      label.className = "aq-option-label";
-      label.textContent = opt.label || "";
-      txt.appendChild(label);
-      if (opt.description) {
-        const desc = document.createElement("span");
-        desc.className = "aq-option-desc";
-        desc.textContent = opt.description;
-        txt.appendChild(desc);
-      }
-      row.append(inp, txt);
-      qWrap.appendChild(row);
-    });
-
-    // "Other" — rendered as one more option row. Per the SDK schema:
-    // "There should be no 'Other' option, that will be provided automatically."
-    // Not wrapped in <label> because the text input lives inside it and we
-    // don't want clicks/keystrokes there to toggle the radio.
-    const otherRow = document.createElement("div");
-    otherRow.className = "aq-option aq-option-other";
-    otherCheck = document.createElement("input");
-    otherCheck.type = q.multiSelect ? "checkbox" : "radio";
-    otherCheck.name = groupName;
-    otherCheck.value = "__other__";
-    otherCheck.addEventListener("change", () => {
-      qState[qi].otherSelected = otherCheck.checked;
-      if (!q.multiSelect && otherCheck.checked) {
-        // Browser already unchecked the option radio; mirror that in state.
-        qState[qi].selectedIdx = null;
-      }
-    });
-    const otherInput = document.createElement("input");
-    otherInput.type = "text";
-    otherInput.className = "aq-other-input";
-    otherInput.placeholder = q.multiSelect ? "Other (will be added)" : "Other answer";
-    otherInput.addEventListener("input", () => {
-      qState[qi].otherText = otherInput.value;
-      // Auto-select Other when the user starts typing. For single-select,
-      // assigning .checked = true also unchecks the previously-picked
-      // option radio (browser maintains the radio-group invariant).
-      if (otherInput.value && !otherCheck.checked) {
-        otherCheck.checked = true;
-        qState[qi].otherSelected = true;
-        if (!q.multiSelect) qState[qi].selectedIdx = null;
-      }
-    });
-    otherRow.append(otherCheck, otherInput);
-    qWrap.appendChild(otherRow);
-
-    form.appendChild(qWrap);
-  });
-
-  const footer = document.createElement("div");
-  footer.className = "aq-footer";
-  const submit = document.createElement("button");
-  submit.type = "button";
-  submit.className = "aq-submit";
-  submit.textContent = "Submit";
-  const msg = document.createElement("span");
-  msg.className = "aq-msg";
-  footer.append(submit, msg);
-  form.appendChild(footer);
-
-  submit.addEventListener("click", async () => {
-    const answers = {};
-    for (let qi = 0; qi < questions.length; qi++) {
-      const q = questions[qi];
-      const s = qState[qi];
-      const opts = Array.isArray(q.options) ? q.options : [];
-      const other = s.otherText.trim();
-      const label = `"${q.header || `Q${qi + 1}`}"`;
-      if (q.multiSelect) {
-        const picked = [...s.selectedIdxs].map((i) => opts[i]?.label).filter(Boolean);
-        if (s.otherSelected) {
-          if (!other) {
-            msg.textContent = `Please type your Other answer for ${label}.`;
-            return;
-          }
-          picked.push(other);
-        }
-        if (picked.length === 0) {
-          msg.textContent = `Please answer ${label}.`;
-          return;
-        }
-        answers[q.question] = picked.join(", ");
-      } else {
-        if (s.otherSelected) {
-          if (!other) {
-            msg.textContent = `Please type your Other answer for ${label}.`;
-            return;
-          }
-          answers[q.question] = other;
-        } else if (s.selectedIdx != null) {
-          answers[q.question] = opts[s.selectedIdx]?.label || "";
-        } else {
-          msg.textContent = `Please answer ${label}.`;
-          return;
-        }
-      }
-    }
-
-    submit.disabled = true;
-    submit.textContent = "Submitting…";
-    msg.textContent = "";
-    try {
-      const convId = state.current?.id;
-      if (!convId) throw new Error("No active conversation.");
-      const res = await apiFetch(
-        `/api/chat/${encodeURIComponent(convId)}/answer`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tool_use_id: toolUseId, answers }),
-        },
-      );
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
-      }
-      // Lock the form. The inbound tool_result will replace this body
-      // with a summary via setToolResult anyway, but if that's slow the
-      // user shouldn't be able to re-submit.
-      form.querySelectorAll("input").forEach((el) => { el.disabled = true; });
-      submit.textContent = "Submitted";
-      // setToolResult will also drop this id when the tool_result
-      // arrives, but unlocking the prompt as soon as we know the
-      // resolver fired feels snappier.
-      openAsks.delete(toolUseId);
-      applyPromptState();
-    } catch (err) {
-      if (err.message === "unauthorized") return;
-      msg.textContent = `Failed: ${err.message}`;
-      submit.disabled = false;
-      submit.textContent = "Submit";
-      // The question is dead (404 / network) — let the user type again.
-      openAsks.delete(toolUseId);
-      applyPromptState();
-    }
-  });
-
-  return form;
-}
-
-function setToolResult(toolUseId, content, isError) {
-  const entry = toolCards.get(toolUseId);
-  if (!entry) return;
-  // AskUserQuestion result arriving → unlock the prompt if it was the
-  // last open one. Covers Stop-aborts-turn and normal-completion paths.
-  if (openAsks.delete(toolUseId)) applyPromptState();
-
-  const body = renderToolBody(entry.name, entry.input, content, isError)
-    || renderGeneric(entry.input, content, isError);
-
-  entry.body.replaceChildren(body, rawToggle(entry.input, content, isError));
-
-  entry.statusEl.classList.remove("pending");
-  if (isError) {
-    entry.statusEl.classList.add("err");
-    entry.statusEl.textContent = "✗";
-  } else {
-    entry.statusEl.classList.add("ok");
-    entry.statusEl.textContent = "✓";
-  }
-}
-
-function makeTextBubble(cls, text) {
-  const el = document.createElement("div");
-  el.className = `msg ${cls}`;
-  el.textContent = text;
-  return el;
-}
-
-function renderAssistant(msg) {
-  const content = msg.message?.content;
-  if (!Array.isArray(content)) return;
-  for (const block of content) {
-    if (block.type === "text") {
-      const t = (block.text ?? "").trim();
-      if (t) appendNode(makeTextBubble("assistant", block.text));
-    } else if (block.type === "tool_use") {
-      appendNode(makeToolCard(block));
-    }
-  }
-}
-
-function renderUser(msg) {
-  const content = msg.message?.content;
-  if (!Array.isArray(content)) return;
-  for (const block of content) {
-    if (block.type === "tool_result") {
-      setToolResult(block.tool_use_id, block.content, block.is_error);
-    }
-  }
-}
-
-function renderSystem(msg) {
-  if (msg.subtype === "init") {
-    const sid = msg.session_id ? String(msg.session_id).slice(0, 8) : "?";
-    const model = msg.model || "";
-    appendNode(makeTextBubble("system", `session ${sid} · ${model}`));
-  }
-}
-
-function renderResult(msg) {
-  const ok = msg.subtype === "success";
-  const parts = [];
-  parts.push(ok ? "✓ done" : `✗ ${msg.subtype ?? "error"}`);
-  if (typeof msg.duration_ms === "number") parts.push(`${(msg.duration_ms / 1000).toFixed(1)}s`);
-  const pct = ctxUsedPct(msg);
-  if (pct !== null) parts.push(`${pct}% ctx`);
-  appendNode(makeTextBubble("system", parts.join(" · ")));
-}
-
-// Mirrors Claude Code's status-line math (see sdk.cli.js Qo/OI/_DA/bd):
-//   numerator = input + cache_read + cache_creation + output  (latest assistant turn)
-//   denominator = contextWindow(model) - maxOutputTokens(model)
-// Both derived from the model id substring; the SDK's modelUsage.contextWindow
-// is ignored because it isn't what Claude Code itself reads.
-function ctxUsedPct(msg) {
-  const u = msg?.usage;
-  if (!u) return null;
-  const num =
-    (u.input_tokens ?? 0) +
-    (u.cache_read_input_tokens ?? 0) +
-    (u.cache_creation_input_tokens ?? 0) +
-    (u.output_tokens ?? 0);
-  if (num <= 0) return null;
-  const model = pickModelId(msg);
-  const denom = contextWindowFor(model) - maxOutputFor(model);
-  if (denom <= 0) return null;
-  return Math.round((num / denom) * 100);
-}
-
-function pickModelId(msg) {
-  const keys = msg?.modelUsage ? Object.keys(msg.modelUsage) : [];
-  return keys[0] || "";
-}
-
-function contextWindowFor(model) {
-  return model.includes("[1m]") ? 1_000_000 : 200_000;
-}
-
-function maxOutputFor(model) {
-  if (model.includes("opus-4-5")) return 64_000;
-  if (model.includes("opus-4")) return 32_000;
-  if (model.includes("sonnet-4") || model.includes("haiku-4")) return 64_000;
-  if (model.includes("3-5")) return 8_192;
-  if (model.includes("claude-3-opus")) return 4_096;
-  if (model.includes("claude-3-sonnet")) return 8_192;
-  if (model.includes("claude-3-haiku")) return 4_096;
-  return 32_000;
-}
-
-function renderSdkMessage(msg) {
-  switch (msg.type) {
-    case "system":    renderSystem(msg); break;
-    case "assistant": renderAssistant(msg); break;
-    case "user":      renderUser(msg); break;
-    case "result":    renderResult(msg); break;
-    default: break;
   }
 }
 
@@ -1448,20 +710,13 @@ async function send() {
       return;
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let sepIdx;
-      while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
-        const rawEvent = buffer.slice(0, sepIdx);
-        buffer = buffer.slice(sepIdx + 2);
-        handleSseFrame(rawEvent);
-      }
-    }
+    await streamSse(res, {
+      onMessage: (sdkMsg) => renderSdkMessage(sdkMsg, renderCtx),
+      onError: (err) => {
+        if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
+        else append("error", err.payload?.message ?? JSON.stringify(err.payload));
+      },
+    });
   } catch (err) {
     if (err.name !== "AbortError") append("error", `Network error: ${err.message}`);
     else append("system", "(cancelled)");
@@ -1477,21 +732,4 @@ async function send() {
     }
     refreshSidebar();
   }
-}
-
-function handleSseFrame(frame) {
-  const lines = frame.split("\n");
-  let event = "message";
-  let data = "";
-  for (const line of lines) {
-    if (line.startsWith(":")) continue;
-    if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trimStart();
-  }
-  if (!data) return;
-  let parsed;
-  try { parsed = JSON.parse(data); }
-  catch { append("system", `(unparseable: ${data})`); return; }
-  if (event === "message") renderSdkMessage(parsed);
-  else if (event === "error") append("error", parsed.message ?? JSON.stringify(parsed));
 }
