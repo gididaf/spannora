@@ -47,9 +47,9 @@ Each spannora install is still self-contained; the hub is optional and additive.
 
 ## Stack
 
-TypeScript on Node ≥20, plain `node:http` (no Fastify/Express), `better-sqlite3`, `bcryptjs` (pure-JS, no native build), `@anthropic-ai/claude-agent-sdk` (which bundles its own `cli.js` — no separate Claude Code install needed). Frontend is vanilla ES modules + one inline-CSS HTML page per app. SSE for streaming.
+TypeScript on Node ≥20, plain `node:http` (no Fastify/Express), `better-sqlite3`, `bcryptjs` (pure-JS, no native build), `@anthropic-ai/claude-agent-sdk` (which bundles its own `cli.js` — no separate Claude Code install needed). Server + hub frontends are vanilla ES modules with one inline-CSS HTML page per app. The marketing site (`packages/site/`) is Astro 5 static (MDX docs, generated sitemap, JSON-LD, zero client JS by default — see "Marketing site" below). SSE for streaming chat.
 
-npm workspaces drive the monorepo. No bundler — the browser imports `/shared/*.js` directly. Server tarball staging (and the Pages deploy workflow) follow the symlink to copy real files into the artifact.
+npm workspaces drive the monorepo. No bundler for server/hub — the browser imports `/shared/*.js` directly. Server tarball staging (and the Pages deploy workflow) follow the symlink to copy real files into the artifact. The site has its own Vite-based build via Astro.
 
 ## Local dev
 
@@ -218,6 +218,56 @@ settings     keyPath="key"
 
 curl `-w "%{http_code}"` etc. also trips shtum because `%{...}` looks like a placeholder. Either avoid the `-w` format, or wrap the whole command in `shtum run -- bash -c '...'`.
 
+shtum also provides **`{CF_EMAIL}`** and **`{CF_TOKEN}`** placeholders for the Cloudflare Global API key. `spannora.dev`'s DNS lives on Cloudflare; mutate records via:
+
+```bash
+shtum run -- bash -c 'curl -sS \
+  -H "X-Auth-Email: {CF_EMAIL}" \
+  -H "X-Auth-Key: {CF_TOKEN}" \
+  https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records'
+```
+
+The spannora.dev zone id is `<redacted-zone-id>`. All records stay `proxied: false` (grey-cloud) — see "DNS + GitHub Pages" below.
+
+## Marketing site (`packages/site/`)
+
+Astro 5 static site served at `https://spannora.dev/`. SEO-first by construction. Key decisions:
+
+- `astro.config.mjs`: `site: "https://spannora.dev"`, `trailingSlash: "always"`, `build.format: "directory"` (canonical URLs end with `/`), `build.inlineStylesheets: "always"` (the BaseLayout's ~5KB CSS is fully inlined → no external CSS request → best LCP). Integrations: `@astrojs/mdx` and `@astrojs/sitemap` (generates `/sitemap-index.xml` referenced from `public/robots.txt`).
+- **`BaseLayout.astro` is the only place SEO meta lives**: `<title>`, description, canonical built from `Astro.url.pathname`, OG + Twitter cards, theme-color, favicon, and all JSON-LD. The `Organization` JSON-LD is emitted on every page; pages pass extra blocks via the `jsonLd` prop (the landing emits `SoftwareApplication` + `FAQPage` + `WebSite`).
+- **`DocsLayout.astro`** wraps BaseLayout and auto-emits a `BreadcrumbList` JSON-LD plus a visible breadcrumb nav. Each MDX docs page declares `layout: ../../layouts/DocsLayout.astro` in frontmatter — Astro passes `frontmatter.{title, description, breadcrumb}` through to the layout.
+- **MDX, not content collections**: 5 docs pages live as plain `.mdx` files under `src/pages/docs/`. Content collections are overkill below ~20 entries — revisit if docs grow.
+- **No client JS by default**. The one island is `InstallBlock.astro`'s clipboard button (a `<script>` Astro auto-bundles). If you add islands, prefer `client:visible` over `client:load`.
+- **CSS specificity gotcha**: `.nav-links a` had higher specificity than `.btn-primary`, making the header's "Open hub" button render with `--text-muted` color. Fixed via `.nav-links a:not(.btn)` — preserve that `:not(.btn)` exclusion if you add new nav-link rules.
+- **`<style is:global>`** in BaseLayout carries the whole design system (CSS vars, layout primitives, button styles, prose styles for MDX, skip-link). Per-page `<style>` (scoped by default in Astro) handles page-specific tweaks. Don't ship per-page web-font requests — system-font stack only.
+- **Skip-link** is `position: fixed` + `transform: translateY(-110%)` so it's truly hidden until `:focus`. `position: absolute` doesn't work here because the sticky header's `backdrop-filter` creates a stacking context that traps the absolute link behind it visually.
+- **The site never imports from `@spannora/shared`**. It's deliberately isolated from server/hub code.
+
+## DNS + GitHub Pages
+
+`spannora.dev` is registered through Cloudflare (zone id `<redacted-zone-id>`). The zone holds **six records**:
+
+| Type | Name | Value | Proxied |
+|---|---|---|---|
+| A | `@` (apex) | `185.199.108.153` | false |
+| A | `@` | `185.199.109.153` | false |
+| A | `@` | `185.199.110.153` | false |
+| A | `@` | `185.199.111.153` | false |
+| CNAME | `www` | `gididaf.github.io` | false |
+| CAA | `@` | `0 issue "letsencrypt.org"` | — |
+
+All `proxied: false` (grey cloud). **Cloudflare proxy must stay off** — orange cloud breaks GitHub's HTTP-01 ACME cert challenge. Cloudflare auto-adds CAA entries for additional CAs (`comodoca`, `digicert`, `pki.goog`, `ssl.com`) on top of our `letsencrypt.org` entry — these are zone-level defaults and harmless.
+
+GitHub Pages config:
+
+- Source: "GitHub Actions" (Settings → Pages → Build and deployment → Source)
+- Custom domain: `spannora.dev`, set via API: `gh api repos/gididaf/spannora/pages -X PUT -f cname=spannora.dev`
+- Enforce HTTPS: `true` — re-enable after cert provisions with `gh api ... -X PUT -F https_enforced=true` (note `-F` for boolean, not `-f`)
+- Cert covers apex + `www.spannora.dev`; `www` 301s to apex
+- The `CNAME` file ships from `packages/site/public/CNAME` (Astro copies to `dist/`)
+
+Cert provisioning is fast (~30s in our experience) once DNS resolves at GitHub's edge. Pages auto-renews the Let's Encrypt cert.
+
 ## Build / packaging quirks
 
 - `packages/server/scripts/package.mjs` adds `--no-xattrs --no-mac-metadata --no-fflags` to `tar` on macOS so the tarball doesn't carry `LIBARCHIVE.xattr.com.apple.provenance` PAX headers that emit warnings on Linux extract.
@@ -239,6 +289,8 @@ All 7 phases done.
 8. PWA install — v0.3.0, fixes in v0.3.1
 
 **v0.5.0** adds the monorepo, `@spannora/shared`, token auth + CORS on the server, and the standalone hub PWA — all additive (existing installs are unaffected without `SPANNORA_ALLOWED_ORIGINS`).
+
+**Post-v0.5.0** (current `main`, not yet release-tagged): added `packages/site` — the Astro static marketing + docs site at `spannora.dev`. Hub PWA moved from `/spannora/` → `/app/` on the same Pages deployment. Hub `manifest.webmanifest` gains `id: "spannora-hub"` so future origin moves don't fragment PWA install identity. Pages workflow rewritten as `deploy-pages.yml` (triggers on every push to main, decoupled from `v*` tags). Server-side installs are unaffected.
 
 **Out of scope per the original plan:** file upload/download, multi-user accounts, cross-host session adapters (the hub registers per-instance — it does not federate or proxy), built-in TLS, mobile-first UI polish (responsive is enough).
 
