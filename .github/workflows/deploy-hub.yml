@@ -40,14 +40,18 @@ jobs:
 
       - name: Stage hub site
         run: |
-          mkdir -p site/spannora
+          # Pages serves project sites at <owner>.github.io/<repo>/, which
+          # for us is /spannora/. The artifact root is mounted at that
+          # path, so we stage to site/ (NOT site/spannora/) — staging to
+          # site/spannora/ would publish at /spannora/spannora/.
+          mkdir -p site
           # -L dereferences the packages/hub/shared symlink so the deployed
           # /spannora/shared/ contains the real @spannora/shared modules.
-          cp -rL packages/hub/. site/spannora/
+          cp -rL packages/hub/. site/
           # Sanity check: shared modules must be real files, not a dangling
           # symlink. If this fails, the symlink wasn't followed.
-          test -f site/spannora/shared/index.js
-          test -f site/spannora/shared/sse.js
+          test -f site/shared/index.js
+          test -f site/shared/sse.js
 
       - uses: actions/configure-pages@v5
 
