@@ -27,7 +27,7 @@ The hub talks to your spannora across origins, so each install you want to manag
 curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_ALLOWED_ORIGINS=https://spannora.dev bash
 ```
 
-The variable must be on the **bash** at the tail of the pipe, not the `curl`. `SPANNORA_ALLOWED_ORIGINS=... curl ... | bash` does nothing — the var lives in curl's environment and never reaches bash. See [install docs](/docs/install/#passing-env-vars-correctly) for the full explanation.
+The variable must be on the **bash** at the tail of the pipe, not the `curl`. `SPANNORA_ALLOWED_ORIGINS=... curl ... | bash` does nothing — the var lives in curl's environment and never reaches bash. See [Customizing the install](/docs/install/#customizing-the-install) for the full explanation.
 
 To clear the allowlist later, re-run the installer with the variable **unset** — the drop-in is removed.
 

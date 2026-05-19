@@ -36,19 +36,27 @@ What it does:
 
 Visit `https://<your-vm-ip>.sslip.io/setup`, paste the setup token, create your account, and you're in.
 
-## Custom domain
+## Customizing the install
 
-Point an A record at your VM, then run:
+The installer reads a handful of environment variables. **The variable must be set on `bash` at the end of the pipe, not on `curl` in front** — `curl` and `bash` are separate processes and a pipe doesn't carry environment across them.
 
 ```bash
+# ✓ Works — var is in bash's environment
 curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_DOMAIN=chat.example.com bash
+
+# ✓ Also works — explicit export + sudo -E
+export SPANNORA_DOMAIN=chat.example.com
+curl -fsSL https://spannora.dev/install.sh | sudo -E bash
+
+# ✗ Does NOT work — var is in curl's environment, never reaches bash
+SPANNORA_DOMAIN=chat.example.com curl -fsSL https://spannora.dev/install.sh | bash
 ```
 
-The installer will configure the proxy and request a certificate for that hostname instead of `sslip.io`.
+That last shape is what the prefix looks like in most `cmd | bash` recipes online, so it's a natural thing to type — but it silently does nothing here. The installer prints which overrides it saw at the top of its output; if your variable doesn't show up there, you've hit this trap.
 
-## Other install options
+If you're setting `SPANNORA_DOMAIN`, point an A record at your VM first — Let's Encrypt's HTTP-01 challenge needs DNS to resolve before the installer can provision a cert.
 
-The installer respects a handful of environment variables:
+### Supported variables
 
 | Variable | Purpose |
 |---|---|
@@ -58,22 +66,7 @@ The installer respects a handful of environment variables:
 | `SPANNORA_ACME_EMAIL` | Email registered with Let's Encrypt. |
 | `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin [hub](/docs/hub/) access). Re-run unset to clear. |
 
-### Passing env vars correctly
-
-The variable must be set in the **bash** process at the end of the pipe, not the `curl` in front. Two shapes that work:
-
-```bash
-# inline on bash (one-shot)
-curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_ALLOWED_ORIGINS=https://spannora.dev bash
-
-# or export + sudo -E to preserve env
-export SPANNORA_ALLOWED_ORIGINS=https://spannora.dev
-curl -fsSL https://spannora.dev/install.sh | sudo -E bash
-```
-
-`SPANNORA_ALLOWED_ORIGINS=... curl ... | bash` does **not** work — the variable lives in curl's environment and never reaches bash. Same trap applies to all the variables above.
-
-The installer is idempotent: re-running with `SPANNORA_ALLOWED_ORIGINS` set writes a systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf`; re-running with it unset removes that drop-in.
+The installer is idempotent: re-running with `SPANNORA_ALLOWED_ORIGINS` set writes a systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf`; re-running with it unset removes that drop-in. The main systemd unit is rewritten on every install, so the drop-in is how CORS config survives upgrades.
 
 ## Reverse-proxy detection
 
