@@ -26,8 +26,10 @@ import {
   startSession,
   endSession,
   readSession,
+  issueToken,
   type AuthedRequest,
 } from "./auth.js";
+import { applyCors } from "./cors.js";
 import { log } from "./log.js";
 import { startRetention } from "./retention.js";
 
@@ -542,9 +544,50 @@ function handleListSessions(res: http.ServerResponse, auth: AuthedRequest): void
     created_at: s.created_at,
     last_used_at: s.last_used_at,
     user_agent: s.user_agent,
+    kind: s.kind,
+    label: s.label,
     current: s.id === auth.session.id,
   }));
   sendJson(res, 200, { items: sessions });
+}
+
+/**
+ * Mint a long-lived API token for cross-origin clients (e.g. the hub PWA).
+ * Public — gated on username+password just like /api/auth/login. The
+ * token is the session id itself (UUIDv4), stored with kind='token'.
+ * Body: { username, password, label? }
+ * Response: { token, kind:"token", label, created_at }
+ */
+function handleAuthToken(req: http.IncomingMessage, res: http.ServerResponse): void {
+  readJsonBody(req)
+    .then(async (body) => {
+      const { username, password, label } = (body ?? {}) as {
+        username?: string;
+        password?: string;
+        label?: string;
+      };
+      if (typeof username !== "string" || typeof password !== "string") {
+        sendJson(res, 400, { error: "username and password are required" });
+        return;
+      }
+      const user = await authenticate(username, password);
+      if (!user) {
+        sendJson(res, 401, { error: "invalid credentials" });
+        return;
+      }
+      const ua = (req.headers["user-agent"] as string | undefined) ?? null;
+      const session = issueToken(user, {
+        label: typeof label === "string" ? label : null,
+        user_agent: ua,
+      });
+      sendJson(res, 200, {
+        token: session.id,
+        kind: session.kind,
+        label: session.label,
+        created_at: session.created_at,
+      });
+    })
+    .catch((err) => sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) }));
 }
 
 function handleRevokeSession(res: http.ServerResponse, auth: AuthedRequest, sessionId: string): void {
@@ -576,6 +619,9 @@ function isPublicPath(method: string | undefined, p: string): boolean {
   if (method === "GET" && p === "/api/auth/status") return true;
   if (method === "POST" && p === "/api/auth/setup") return true;
   if (method === "POST" && p === "/api/auth/login") return true;
+  // Cross-origin clients (hub PWA) exchange creds for a bearer token via
+  // this endpoint. Same gating as /api/auth/login — password-checked.
+  if (method === "POST" && p === "/api/auth/token") return true;
   // PWA assets — the browser fetches these even on /login (before auth), and
   // the service worker registers from any page. Keep them public so install
   // works regardless of session state.
@@ -588,10 +634,19 @@ function isPublicPath(method: string | undefined, p: string): boolean {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
+  // --- CORS ---
+  // No-op when SPANNORA_ALLOWED_ORIGINS is unset or the request Origin
+  // isn't on the allowlist. Otherwise sets response headers (so SSE +
+  // /api/* responses are readable cross-origin) and short-circuits
+  // preflight OPTIONS with a 204 — before the auth gate, so the
+  // browser doesn't see a redirect on its preflight.
+  if (applyCors(req, res).handled) return;
+
   // --- Public routes ---
   if (req.method === "GET" && url.pathname === "/api/auth/status") return handleAuthStatus(res);
   if (req.method === "POST" && url.pathname === "/api/auth/setup") return handleAuthSetup(req, res);
   if (req.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(req, res);
+  if (req.method === "POST" && url.pathname === "/api/auth/token") return handleAuthToken(req, res);
 
   if (isPublicPath(req.method, url.pathname)) {
     if (req.method === "GET") {

@@ -927,6 +927,25 @@
         text-transform: uppercase;
         letter-spacing: 0.05em;
       }
+      .account-session .session-kind {
+        display: inline-block;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-right: 8px;
+        vertical-align: middle;
+      }
+      .account-session .session-kind.cookie {
+        color: var(--muted);
+        background: rgba(138, 147, 166, 0.12);
+      }
+      .account-session .session-kind.token {
+        color: var(--accent);
+        background: rgba(122, 162, 247, 0.16);
+      }
 
       /* Drawer behaviour: on narrower viewports the sidebar slides in over the
          main pane instead of taking permanent space. */

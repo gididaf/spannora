@@ -32,12 +32,28 @@ export interface User {
   created_at: number;
 }
 
+export type SessionKind = "cookie" | "token";
+
 export interface Session {
   id: string;
   user_id: string;
   created_at: number;
   last_used_at: number;
   user_agent: string | null;
+  /**
+   * "cookie" sessions are the browser-issued, 30-day sliding ones. "token"
+   * sessions are long-lived API tokens issued via POST /api/auth/token —
+   * used by the hub PWA via Authorization: Bearer.
+   */
+  kind: SessionKind;
+  /** Free-text label for "token" rows (e.g. "spannora hub @ iphone"). Null for cookies. */
+  label: string | null;
+  /**
+   * Absolute expiry timestamp (ms since epoch). Null = no expiry.
+   * v1 tokens are all `null` (revoke-only); cookies enforce a 30-day idle
+   * window via last_used_at, not via this column.
+   */
+  expires_at: number | null;
 }
 
 function resolveDbPath(): string {
@@ -108,6 +124,9 @@ function migrate(d: Database.Database): void {
   for (const stmt of [
     "ALTER TABLE conversations ADD COLUMN last_context_tokens INTEGER",
     "ALTER TABLE conversations ADD COLUMN last_context_window INTEGER",
+    "ALTER TABLE sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'cookie'",
+    "ALTER TABLE sessions ADD COLUMN label TEXT",
+    "ALTER TABLE sessions ADD COLUMN expires_at INTEGER",
   ]) {
     try { d.exec(stmt); } catch { /* column already exists */ }
   }
@@ -267,7 +286,16 @@ export function deleteAllUsers(): void {
 
 // --- Sessions ---
 
-export function createSession(params: { user_id: string; user_agent: string | null }): Session {
+const SESSION_COLUMNS =
+  "id, user_id, created_at, last_used_at, user_agent, kind, label, expires_at";
+
+export function createSession(params: {
+  user_id: string;
+  user_agent: string | null;
+  kind?: SessionKind;
+  label?: string | null;
+  expires_at?: number | null;
+}): Session {
   const now = Date.now();
   const session: Session = {
     id: randomUUID(),
@@ -275,11 +303,14 @@ export function createSession(params: { user_id: string; user_agent: string | nu
     created_at: now,
     last_used_at: now,
     user_agent: params.user_agent,
+    kind: params.kind ?? "cookie",
+    label: params.label ?? null,
+    expires_at: params.expires_at ?? null,
   };
   openDb()
     .prepare(
-      `INSERT INTO sessions (id, user_id, created_at, last_used_at, user_agent)
-       VALUES (@id, @user_id, @created_at, @last_used_at, @user_agent)`,
+      `INSERT INTO sessions (id, user_id, created_at, last_used_at, user_agent, kind, label, expires_at)
+       VALUES (@id, @user_id, @created_at, @last_used_at, @user_agent, @kind, @label, @expires_at)`,
     )
     .run(session);
   return session;
@@ -287,10 +318,7 @@ export function createSession(params: { user_id: string; user_agent: string | nu
 
 export function getSession(id: string): Session | null {
   const row = openDb()
-    .prepare(
-      `SELECT id, user_id, created_at, last_used_at, user_agent
-       FROM sessions WHERE id = ?`,
-    )
+    .prepare(`SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`)
     .get(id);
   return (row as Session | undefined) ?? null;
 }
@@ -304,7 +332,7 @@ export function touchSession(id: string): void {
 export function listSessionsForUser(user_id: string): Session[] {
   return openDb()
     .prepare(
-      `SELECT id, user_id, created_at, last_used_at, user_agent
+      `SELECT ${SESSION_COLUMNS}
        FROM sessions WHERE user_id = ?
        ORDER BY last_used_at DESC`,
     )
@@ -315,9 +343,14 @@ export function deleteSession(id: string): void {
   openDb().prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
 }
 
+/**
+ * GC sweep for idle browser cookie sessions only. API tokens (kind='token')
+ * are never auto-deleted — they're revoke-only — so they're excluded from
+ * the WHERE clause regardless of their last_used_at.
+ */
 export function deleteSessionsOlderThan(cutoff: number): number {
   const result = openDb()
-    .prepare(`DELETE FROM sessions WHERE last_used_at < ?`)
+    .prepare(`DELETE FROM sessions WHERE kind = 'cookie' AND last_used_at < ?`)
     .run(cutoff);
   return result.changes;
 }

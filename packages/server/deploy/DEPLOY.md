@@ -120,6 +120,37 @@ location / {
 
 Visit `https://<your-domain-or-sslip>` → /setup → paste the token from step 4 → pick a username/password. You're in.
 
+## 7. Allow the hub PWA (optional)
+
+The standalone hub PWA at `https://gididaf.github.io/spannora/` (or any self-hosted copy) is a different origin from this spannora instance, so the browser blocks its requests unless you opt in. Add the hub's origin to `SPANNORA_ALLOWED_ORIGINS`:
+
+```bash
+sudo systemctl edit spannora     # adds an override fragment
+```
+
+Paste:
+
+```ini
+[Service]
+Environment=SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io
+```
+
+Save, then:
+
+```bash
+sudo systemctl restart spannora
+```
+
+Then open the hub in your browser, paste `https://<your-spannora>`, log in, and the hub remembers it as one of your workspaces. The hub holds a long-lived API token in its IndexedDB; you can revoke it any time from the in-server account modal (it shows as "API token · `<label>`").
+
+To allow multiple origins (e.g. the public hub plus a local dev hub), use a comma-separated list:
+
+```ini
+Environment=SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io,http://localhost:5173
+```
+
+The default (env unset) emits no CORS headers at all — existing same-origin behavior is unchanged.
+
 ## Where things live
 
 | Path | What |

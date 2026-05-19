@@ -401,7 +401,19 @@ function renderAccountSessions(sessions) {
 
     const ua = document.createElement("div");
     ua.className = "ua";
-    ua.textContent = shortenUserAgent(s.user_agent);
+    const kindTag = document.createElement("span");
+    kindTag.className = "session-kind " + (s.kind === "token" ? "token" : "cookie");
+    kindTag.textContent = s.kind === "token" ? "API token" : "Browser";
+    ua.appendChild(kindTag);
+    // Identifier text: for token rows we prefer the user-supplied label
+    // (the hub's UA string isn't very identifying); for cookie rows we
+    // shorten the User-Agent.
+    const idText = document.createTextNode(
+      s.kind === "token"
+        ? (s.label || shortenUserAgent(s.user_agent))
+        : shortenUserAgent(s.user_agent),
+    );
+    ua.appendChild(idText);
     row.appendChild(ua);
 
     const meta = document.createElement("div");

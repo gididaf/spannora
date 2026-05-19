@@ -157,22 +157,45 @@ export interface AuthedRequest {
   session: Session;
 }
 
-export function readSession(req: http.IncomingMessage): AuthedRequest | null {
+/**
+ * Pulls a session id off the request. `Authorization: Bearer <id>` wins
+ * over the cookie (the hub PWA never sends a cookie cross-origin anyway,
+ * but explicit bearer always means "I know what I'm doing").
+ */
+function readSessionId(req: http.IncomingMessage): { sid: string; viaBearer: boolean } | null {
+  const auth = req.headers.authorization;
+  if (typeof auth === "string") {
+    const m = /^bearer\s+(.+)$/i.exec(auth.trim());
+    if (m) return { sid: m[1].trim(), viaBearer: true };
+  }
   const cookies = parseCookies(req.headers.cookie);
   const sid = cookies[COOKIE_NAME];
-  if (!sid) return null;
-  const session = getSession(sid);
+  if (sid) return { sid, viaBearer: false };
+  return null;
+}
+
+export function readSession(req: http.IncomingMessage): AuthedRequest | null {
+  const picked = readSessionId(req);
+  if (!picked) return null;
+  const session = getSession(picked.sid);
   if (!session) return null;
-  if (Date.now() - session.last_used_at > SESSION_IDLE_MS) {
-    deleteSession(sid);
+  // Hard absolute expiry first (v1 tokens have null expires_at → no-op).
+  if (session.expires_at !== null && Date.now() > session.expires_at) {
+    deleteSession(picked.sid);
+    return null;
+  }
+  // Cookie sessions enforce a 30-day idle window. Token sessions never
+  // auto-expire — they're revoke-only — so skip the idle check for them.
+  if (session.kind === "cookie" && Date.now() - session.last_used_at > SESSION_IDLE_MS) {
+    deleteSession(picked.sid);
     return null;
   }
   const user = getUserById(session.user_id);
   if (!user) {
-    deleteSession(sid);
+    deleteSession(picked.sid);
     return null;
   }
-  touchSession(sid);
+  touchSession(picked.sid);
   return { user, session };
 }
 
@@ -182,9 +205,31 @@ export function startSession(
   user: User,
 ): Session {
   const ua = (req.headers["user-agent"] as string | undefined) ?? null;
-  const session = createSession({ user_id: user.id, user_agent: ua });
+  const session = createSession({
+    user_id: user.id,
+    user_agent: ua,
+    kind: "cookie",
+  });
   setSessionCookie(req, res, session.id);
   return session;
+}
+
+/**
+ * Mint a long-lived API token for `Authorization: Bearer` use. Stored in
+ * the same `sessions` table as cookie sessions (with kind='token') so the
+ * existing /api/auth/sessions list + revoke flow works unchanged.
+ */
+export function issueToken(
+  user: User,
+  params: { label: string | null; user_agent: string | null },
+): Session {
+  return createSession({
+    user_id: user.id,
+    user_agent: params.user_agent,
+    kind: "token",
+    label: params.label?.trim() || null,
+    expires_at: null,
+  });
 }
 
 export function endSession(
