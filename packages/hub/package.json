@@ -1,0 +1,9 @@
+{
+  "name": "@spannora/hub",
+  "private": true,
+  "type": "module",
+  "description": "Hub PWA — manage multiple spannora backends from a single installable app.",
+  "scripts": {
+    "dev": "python3 -m http.server 5173 --bind 127.0.0.1"
+  }
+}

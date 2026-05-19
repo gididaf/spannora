@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="spannora">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1f2e"/>
+      <stop offset="100%" stop-color="#0f1115"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#9ec1ff"/>
+      <stop offset="100%" stop-color="#5d87f0"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed background; OS/launcher chooses the mask shape. -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- Logo sits inside the 80% safe zone (inset 51.2 each side ≈ 52). -->
+  <g transform="translate(256 256)">
+    <!-- Subtle conversational arc behind the S -->
+    <circle r="148" fill="none" stroke="#1f2436" stroke-width="14"/>
+    <!-- The "S" — bold, slightly playful curve. Drawn as a path so it
+         renders identically across rasterizers. -->
+    <path
+      d="M 60 -78
+         C 60 -100, 30 -118, -10 -118
+         C -68 -118, -90 -82, -90 -52
+         C -90 -22, -68 -2, -22 8
+         L 22 18
+         C 70 30, 90 50, 90 82
+         C 90 118, 56 138, -4 138
+         C -56 138, -86 116, -90 80"
+      fill="none"
+      stroke="url(#mark)"
+      stroke-width="32"
+      stroke-linecap="round"
+      stroke-linejoin="round"/>
+  </g>
+</svg>
