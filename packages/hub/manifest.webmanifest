@@ -1,6 +1,7 @@
 {
   "name": "spannora hub",
   "short_name": "spannora hub",
+  "id": "spannora-hub",
   "description": "Manage multiple spannora backends from one PWA.",
   "start_url": "./",
   "scope": "./",

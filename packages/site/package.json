@@ -1,0 +1,18 @@
+{
+  "name": "@spannora/site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Marketing + docs site for spannora.dev (Astro, static).",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "devDependencies": {
+    "@astrojs/mdx": "^4.0.0",
+    "@astrojs/sitemap": "^3.2.0",
+    "astro": "^5.0.0"
+  }
+}

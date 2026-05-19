@@ -1,0 +1,49 @@
+---
+interface Feature {
+  title: string;
+  body: string;
+  icon?: string;
+}
+interface Props {
+  features: Feature[];
+}
+const { features } = Astro.props;
+---
+
+<div class="feature-grid">
+  {features.map((f) => (
+    <article class="feature">
+      {f.icon && <div class="feature-icon" aria-hidden="true" set:html={f.icon} />}
+      <h3>{f.title}</h3>
+      <p>{f.body}</p>
+    </article>
+  ))}
+</div>
+
+<style>
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .feature {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+  }
+  .feature h3 { margin: 0 0 0.5rem; }
+  .feature p {
+    color: var(--text-muted);
+    margin: 0;
+    font-size: 0.96rem;
+  }
+  .feature-icon {
+    color: var(--accent);
+    margin-bottom: 0.85rem;
+    line-height: 0;
+  }
+  @media (max-width: 860px) {
+    .feature-grid { grid-template-columns: 1fr; }
+  }
+</style>

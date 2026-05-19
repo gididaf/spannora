@@ -10,11 +10,11 @@
 // per-server spannora PWAs installed from individual spannora origins
 // without collision.
 
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE = `spannora-hub-${VERSION}`;
 
 // All paths are relative to the SW's scope, so this works whether the
-// hub is deployed at `/spannora/` (GitHub Pages) or `/` (local dev).
+// hub is deployed at `/app/` (production at spannora.dev) or `/` (local dev).
 const PRECACHE = [
   "./",
   "./index.html",

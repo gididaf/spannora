@@ -1,0 +1,85 @@
+# Publish spannora.dev to GitHub Pages.
+#
+# One Pages deployment serves three things:
+#   /              → packages/site/  (Astro static, marketing + docs)
+#   /app/          → packages/hub/   (the hub PWA, was at /spannora/ pre-v0.6)
+#   /install.sh    → repo-root install.sh  (one-line installer URL)
+#
+# Trigger: every push to main, plus workflow_dispatch for manual re-deploys.
+# Site/hub content changes ship continuously now; tarball releases stay
+# tag-driven and independent (see CLAUDE.md "Release flow").
+#
+# Pages source must be set to "GitHub Actions" in repo Settings → Pages.
+# Custom domain (spannora.dev) is wired via packages/site/public/CNAME
+# (Astro copies it to dist/) and via repo Settings → Pages → Custom domain.
+
+name: Deploy spannora.dev to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build -w packages/site
+
+      - name: Stage combined _site
+        run: |
+          # Site at root.
+          mkdir -p _site
+          cp -rL packages/site/dist/. _site/
+
+          # Hub at /app/ — was /spannora/ pre-v0.6. `cp -rL` dereferences
+          # the packages/hub/shared → ../shared/src symlink so the deployed
+          # /app/shared/ contains real @spannora/shared modules.
+          mkdir -p _site/app
+          cp -rL packages/hub/. _site/app/
+
+          # Installer at /install.sh — referenced by README and the
+          # landing page's copy-to-clipboard block.
+          cp install.sh _site/install.sh
+          chmod +x _site/install.sh
+
+          # Sanity checks. Fail loud rather than ship a broken artifact.
+          test -f _site/index.html        || (echo "site index missing"; exit 1)
+          test -f _site/CNAME             || (echo "CNAME missing"; exit 1)
+          test -f _site/.nojekyll         || (echo ".nojekyll missing"; exit 1)
+          test -f _site/sitemap-index.xml || (echo "sitemap missing"; exit 1)
+          test -f _site/app/index.html    || (echo "hub index missing"; exit 1)
+          test -f _site/app/shared/index.js || (echo "hub shared/ symlink not dereferenced"; exit 1)
+          test -f _site/install.sh        || (echo "installer missing"; exit 1)
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

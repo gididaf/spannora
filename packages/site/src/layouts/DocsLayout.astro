@@ -1,0 +1,68 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+
+interface Frontmatter {
+  title: string;
+  description: string;
+  breadcrumb?: string;
+}
+
+interface Props {
+  frontmatter: Frontmatter;
+}
+
+const { frontmatter } = Astro.props;
+const SITE_URL = "https://spannora.dev";
+
+const breadcrumbItems: Record<string, unknown>[] = [
+  { "@type": "ListItem", position: 1, name: "Home", item: SITE_URL + "/" },
+  { "@type": "ListItem", position: 2, name: "Docs", item: SITE_URL + "/docs/" },
+];
+if (frontmatter.breadcrumb) {
+  breadcrumbItems.push({
+    "@type": "ListItem",
+    position: 3,
+    name: frontmatter.breadcrumb,
+    item: new URL(Astro.url.pathname, SITE_URL).href,
+  });
+}
+
+const breadcrumbLd = {
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  itemListElement: breadcrumbItems,
+};
+---
+
+<BaseLayout
+  title={frontmatter.title}
+  description={frontmatter.description}
+  jsonLd={breadcrumbLd}
+>
+  <article class="container prose docs-article">
+    <nav aria-label="Breadcrumb" class="breadcrumb">
+      <a href="/">Home</a> <span aria-hidden="true">/</span>
+      {frontmatter.breadcrumb ? (
+        <>
+          <a href="/docs/">Docs</a> <span aria-hidden="true">/</span>
+          <span>{frontmatter.breadcrumb}</span>
+        </>
+      ) : (
+        <span>Docs</span>
+      )}
+    </nav>
+    <slot />
+  </article>
+</BaseLayout>
+
+<style>
+  .docs-article { padding: 3rem 0 4rem; }
+  .breadcrumb {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+  }
+  .breadcrumb a { color: var(--text-muted); }
+  .breadcrumb a:hover { color: var(--text); }
+  .breadcrumb span[aria-hidden] { margin: 0 0.4rem; }
+</style>

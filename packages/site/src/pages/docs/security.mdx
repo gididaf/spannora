@@ -1,0 +1,90 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: "Security model — self-hosted Claude Code web UI"
+description: "How spannora handles authentication, why the server runs as root, the threat model for self-hosted Claude Code, and what to lock down before exposing it to the internet."
+breadcrumb: "Security"
+---
+
+# Security model
+
+spannora is a web app that gives Claude root access to your VM. That's the feature, not a bug. This page explains the auth gate that stands between the internet and Claude, the rationale for running as root, and what you should know before exposing a spannora install publicly.
+
+## The threat model
+
+A spannora instance is functionally a remote root shell with an LLM in front. If an attacker authenticates to the web UI, they can ask Claude to read any file on the VM, exfiltrate credentials, modify systemd units, or run arbitrary commands.
+
+The defense is the auth gate. Treat it accordingly.
+
+## Authentication
+
+**Single user per install.** spannora is a personal tool. There's one account; no multi-tenant logic.
+
+- **Password**: bcryptjs at cost factor 12. Pure JS, no native build dependencies.
+- **Setup token**: 24 random bytes, base64url-encoded, printed in a banner on first boot. Required to create the account. Single use. `SPANNORA_RESET=1` regenerates if you lose it (wipes all users and sessions).
+- **Cookie sessions**: `HttpOnly; SameSite=Strict; Secure` (when HTTPS). 30-day sliding window — `last_used_at` is touched on each request, idle sessions GC after `SESSION_IDLE_MS`.
+- **Bearer tokens** (optional): long-lived UUIDs you create from the account modal. The token *is* the session row's primary key. No expiry; revoke manually. Used by cross-origin clients (the hub PWA).
+
+Both auth methods resolve through the same lookup, so all downstream code is auth-kind-agnostic. Cookies and bearer tokens are interchangeable from the server's perspective.
+
+## Why the server runs as root
+
+The systemd unit has no `User=` line. spannora's process runs as root.
+
+The use case is "ask Claude to do something on a VM." Claude's tools — Bash, Edit, Write — need filesystem access to do anything useful. Sandboxing to an unprivileged user defeats the purpose: you can't `apt install`, can't edit systemd units, can't write `/etc/`, can't read root-owned config.
+
+So spannora runs as root, and the auth gate becomes the single line of defense. There's no defense-in-depth via OS permissions because there's nothing to defend.
+
+**Implication**: do not expose a spannora install to the public internet without HTTPS and a strong password. Do not run spannora on a multi-tenant box. Treat the web UI like an `ssh root@vm` session.
+
+## HTTPS
+
+The one-line installer provisions a Let's Encrypt certificate automatically — Caddy handles it transparently, nginx via certbot. Cookies are marked `Secure` only when HTTPS is detected; over plain HTTP, sessions still work but cookies aren't restricted to TLS connections (don't run plain HTTP in production).
+
+## CORS
+
+Cross-origin access is **off by default**. Set `SPANNORA_ALLOWED_ORIGINS` to opt in:
+
+```
+SPANNORA_ALLOWED_ORIGINS=https://spannora.dev,http://localhost:5173
+```
+
+- Exact match only. No wildcards, no subdomain magic.
+- `localhost` and `127.0.0.1` are different origins to browsers — list both if needed.
+- Credentials (cookies) are never sent cross-origin. Cross-origin clients authenticate exclusively with `Authorization: Bearer <token>`.
+- Preflight `OPTIONS` is short-circuited to `204` **before** the auth gate so cross-origin POSTs don't fail at preflight.
+
+When `SPANNORA_ALLOWED_ORIGINS` is unset, the server emits no CORS headers and behaves exactly like pre-CORS spannora — same-origin only.
+
+## What's logged
+
+- Structured JSON logs to systemd journal (`journalctl -u spannora`).
+- HTTP request lines (method, path, status, duration).
+- Auth failures (with redacted credentials).
+- Claude API calls (model, token counts, durations — no message contents).
+
+No telemetry to third parties.
+
+## Retention
+
+Old conversations are deleted by a retention job (`packages/server/src/retention.ts`). Default: 30 days. Removes both the SQLite rows and the matching JSONL files. Configure via env if needed.
+
+## What spannora doesn't do
+
+- **No multi-user accounts.** One install, one user. Run multiple spannoras if you need separation.
+- **No file uploads or downloads through the UI.** Files move through Claude's tool calls (Read, Write, Edit).
+- **No built-in TLS** in the Node process. Always behind a reverse proxy (Caddy or nginx) for HTTPS.
+- **No automatic firewall rules.** You're responsible for `ufw` / `firewalld` / cloud security groups.
+
+## Checklist before exposing
+
+- [ ] HTTPS provisioned (visit the URL in a browser, check the lock icon)
+- [ ] Strong password set during setup
+- [ ] Setup token discarded (no longer needed after account creation)
+- [ ] `SPANNORA_ALLOWED_ORIGINS` is empty unless you actually use the cross-origin hub
+- [ ] VM firewall allows only 22 (SSH), 80, 443
+- [ ] Bearer tokens you've issued are listed and you know what each is for
+- [ ] You understand that a logged-in user can do anything Claude can do (which is anything root can do)
+
+---
+
+Next: [FAQ →](/docs/faq/)

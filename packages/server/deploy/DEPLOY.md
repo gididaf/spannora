@@ -122,7 +122,7 @@ Visit `https://<your-domain-or-sslip>` → /setup → paste the token from step 
 
 ## 7. Allow the hub PWA (optional)
 
-The standalone hub PWA at `https://gididaf.github.io/spannora/` (or any self-hosted copy) is a different origin from this spannora instance, so the browser blocks its requests unless you opt in. Add the hub's origin to `SPANNORA_ALLOWED_ORIGINS`:
+The standalone hub PWA at `https://spannora.dev/app/` (or any self-hosted copy) is a different origin from this spannora instance, so the browser blocks its requests unless you opt in. Add the hub's origin to `SPANNORA_ALLOWED_ORIGINS`:
 
 ```bash
 sudo systemctl edit spannora     # adds an override fragment
@@ -132,7 +132,7 @@ Paste:
 
 ```ini
 [Service]
-Environment=SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io
+Environment=SPANNORA_ALLOWED_ORIGINS=https://spannora.dev
 ```
 
 Save, then:
@@ -146,7 +146,7 @@ Then open the hub in your browser, paste `https://<your-spannora>`, log in, and 
 To allow multiple origins (e.g. the public hub plus a local dev hub), use a comma-separated list:
 
 ```ini
-Environment=SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io,http://localhost:5173
+Environment=SPANNORA_ALLOWED_ORIGINS=https://spannora.dev,http://localhost:5173
 ```
 
 The default (env unset) emits no CORS headers at all — existing same-origin behavior is unchanged.
@@ -185,7 +185,7 @@ sudo sqlite3 /var/lib/spannora/spannora.db ".backup '/tmp/spannora-backup.db'"
 The cleanest path is to re-run the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
+curl -fsSL https://spannora.dev/install.sh | sudo bash
 ```
 
 Or by hand:

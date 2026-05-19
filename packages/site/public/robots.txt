@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://spannora.dev/sitemap-index.xml

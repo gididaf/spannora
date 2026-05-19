@@ -1,0 +1,78 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: "FAQ — spannora, the self-hosted Claude Code web UI"
+description: "Answers to common questions about spannora: how it differs from Claude Code CLI, mobile install, pricing, security, multi-instance management, supported platforms."
+breadcrumb: "FAQ"
+---
+
+# Frequently asked questions
+
+## What is spannora?
+
+spannora is an open-source, self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/sdk). You install it on a Linux VM, and it exposes a browser-based chat that drives Claude with the full agent toolset — Bash, Edit, Write, AskUserQuestion, the lot. Same Claude as the CLI, reachable from any browser.
+
+## How is spannora different from the Claude Code CLI?
+
+The CLI lives in your terminal. spannora is a thin Node server that wraps the Claude Agent SDK and exposes it over HTTP. Both shell into the same Claude with the same auth — they just present different UIs. The web UI is useful when:
+
+- You want to drive Claude from a phone, tablet, or any device that isn't your dev machine.
+- You want sessions that survive a closed laptop.
+- You want to run Claude on a remote VM with full root access and check in occasionally.
+
+## Can I use spannora on my phone?
+
+Yes. spannora is a PWA. Open the install URL in mobile Safari (iOS) or Chrome (Android), then "Add to Home Screen." It runs in standalone mode like a native app, with safe-area padding for the iOS notch and Android nav, and dynamic viewport height so the chat input stays visible above the keyboard.
+
+## Is spannora free?
+
+Yes — MIT licensed, source on GitHub. You'll pay Anthropic for Claude usage (either a Claude Code subscription or pay-as-you-go API), but spannora itself doesn't add any cost. It uses the same `~/.claude/` auth as the Claude Code CLI; if you've logged in once on the VM, you don't pay twice.
+
+## Does spannora work on Windows?
+
+The server runs on Linux only — it expects systemd, a real filesystem, and runs as root so Claude's tools can do useful work. The browser side works anywhere, of course. Windows isn't supported as a development platform either; clone and contribute from macOS or Linux.
+
+## Can I run multiple spannora installs?
+
+Yes — each VM runs its own independent spannora. The [hub PWA](/docs/hub/) at `spannora.dev/app/` connects to many installs simultaneously and lets you switch between them with one tap. The hub is optional and has no backend state of its own; you can also self-host it.
+
+## How do I update spannora?
+
+Re-run the install command:
+
+```bash
+curl -fsSL https://spannora.dev/install.sh | bash
+```
+
+It's idempotent — fetches the latest release tarball, extracts over the existing install, runs `npm install --omit=dev`, restarts the service. Conversations and credentials survive (they live in `/var/lib/spannora/spannora.db` and `~/.claude/`, both untouched).
+
+## How is auth handled?
+
+bcrypt password + HttpOnly cookie sessions for browser use. Optional long-lived bearer tokens for cross-origin clients (like the hub). The full [security model](/docs/security/) page covers the details.
+
+## Why does spannora run as root?
+
+Because Claude needs filesystem and shell access to do useful work. An unprivileged user can't edit `/etc/`, install packages, or modify systemd units. The auth gate is the line of defense; OS-level sandboxing would defeat the use case. See [security model](/docs/security/) for the full rationale.
+
+## What model does spannora use?
+
+Default is **Claude Opus 4.7 with 1M context** (`claude-opus-4-7[1m]`). Override via `SPANNORA_MODEL` env var on the spannora process. The Agent SDK handles the model dispatch; spannora doesn't pin a model except via that env.
+
+## How big can a conversation get?
+
+Up to the context window of whichever Claude variant you're using. Default is 1M tokens (with auto-compaction kicking in well before that). The sidebar shows context-fill percentage live so you can see when you're getting close.
+
+## Does spannora support tool approval prompts?
+
+By default it runs in `bypassPermissions` mode — Claude's tool calls execute without per-call prompts (since you presumably want it to actually do things on your VM). The exception is `AskUserQuestion` and `ExitPlanMode`, which always render an interactive prompt in the UI regardless of mode.
+
+## Can I export conversations?
+
+Not yet through the UI. Conversations live in `/var/lib/spannora/spannora.db` (SQLite) and the underlying Claude session JSONL files in `~/.claude/projects/<encoded-cwd>/`. Both are readable directly. UI export is a likely future addition.
+
+## Where do I file bugs or feature requests?
+
+[GitHub issues](https://github.com/gididaf/spannora/issues). PRs welcome too — the repo is a TypeScript + vanilla JS monorepo with three workspaces (server, shared, hub) and now a fourth (this site).
+
+---
+
+Back to [docs home](/docs/) · or [install spannora](/docs/install/) on a VM.

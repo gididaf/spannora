@@ -12,7 +12,7 @@ Self-hosted web chat for [Claude Code](https://docs.claude.com/en/docs/claude-co
 ## Install (Linux + systemd)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
+curl -fsSL https://spannora.dev/install.sh | sudo bash
 ```
 
 The script:

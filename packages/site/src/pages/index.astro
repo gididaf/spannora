@@ -1,0 +1,171 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Hero from "../components/Hero.astro";
+import FeatureGrid from "../components/FeatureGrid.astro";
+import InstallBlock from "../components/InstallBlock.astro";
+import FAQ from "../components/FAQ.astro";
+
+const title = "spannora — A web UI for Claude Code (self-hosted)";
+const description =
+  "spannora is a self-hosted web UI for Claude Code. Install on your VM with one command, drive Claude from any browser or phone. Open source, PWA-installable.";
+
+const installCommand = "curl -fsSL https://spannora.dev/install.sh | bash";
+
+const features = [
+  {
+    title: "Built for mobile",
+    body:
+      "Install as a PWA on Android or iOS. Drive Claude Code from a phone with safe-area-aware UX, persistent sessions, and a real keyboard-friendly chat input.",
+    icon: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>',
+  },
+  {
+    title: "Multi-VM hub",
+    body:
+      "The standalone hub manages many spannora installs from one screen. Switch between dev, staging, and sandbox machines with one tap. Bearer-token auth across origins.",
+    icon: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  },
+  {
+    title: "Full tool support",
+    body:
+      "Bash, Edit, Write, AskUserQuestion — every Claude Code tool works. SSE streaming, mid-stream interrupt, conversation resume, context-fill matching the official status line.",
+    icon: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+  },
+];
+
+const faqItems = [
+  {
+    q: "What is spannora?",
+    a: "<p>spannora is a self-hosted web UI for <a href='https://docs.claude.com/en/docs/claude-code/sdk' rel='noopener'>Claude Code</a>. You run it on a Linux VM, and it gives you a browser-based chat that drives Claude with the full toolset — Bash, Edit, Write, the lot. It's the same Claude you'd use in the CLI, reachable from any device.</p>",
+  },
+  {
+    q: "How is this different from the Claude Code CLI?",
+    a: "<p>The CLI lives in your terminal. spannora is a thin server that wraps the Claude Agent SDK and exposes it as a web app. Same underlying Claude, same tools, same auth — different UI surface. Run Claude on a remote VM and you can still kick off tasks from your phone or any browser.</p>",
+  },
+  {
+    q: "Can I use spannora on my phone?",
+    a: "<p>Yes. spannora is a PWA — open it in mobile Safari or Chrome, tap \"Add to Home Screen,\" and it installs like a native app. The UI is designed mobile-first: safe-area insets for the iOS notch, dynamic viewport height that handles Android keyboards correctly, and a chat input that stays in reach while Claude streams.</p>",
+  },
+  {
+    q: "Is self-hosted Claude Code secure?",
+    a: "<p>spannora ships with bcrypt password auth, HttpOnly cookie sessions, optional long-lived bearer tokens for cross-origin clients, and a one-time setup token on first boot. The one-line installer provisions HTTPS via Let's Encrypt automatically (Caddy or nginx + certbot). The web UI is treated like a root shell because that's exactly what it is — Claude needs filesystem access on the VM to actually do work. Lock down the auth gate, don't expose it without HTTPS.</p>",
+  },
+  {
+    q: "How much does spannora cost?",
+    a: "<p>spannora itself is free and open source (MIT). You'll pay Anthropic for Claude usage — either through a Claude Code subscription or pay-as-you-go API. spannora uses the same auth as the Claude Code CLI, so if you've already paid for Claude Code, no extra cost.</p>",
+  },
+  {
+    q: "Can I run multiple spannora instances?",
+    a: "<p>Yes. Each VM runs its own spannora. The hub at <a href='/app/'>spannora.dev/app/</a> is a static PWA that connects to many installs simultaneously and lets you switch between them with one tap. Or self-host the hub if you prefer — it's just static files in the same repo.</p>",
+  },
+  {
+    q: "Does spannora work on Windows?",
+    a: "<p>The server is Linux-only by design — it expects systemd, a real filesystem, and runs as root so Claude's tool calls can do useful work. The frontend (browser + PWA) works on any OS, naturally. Windows isn't supported as a dev platform either; macOS and Linux only.</p>",
+  },
+];
+
+const softwareApplicationLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "spannora",
+  description,
+  url: "https://spannora.dev",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "Linux, macOS",
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+  softwareVersion: "0.5",
+  license: "https://github.com/gididaf/spannora/blob/main/LICENSE",
+};
+
+const faqPageLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faqItems.map(({ q, a }) => ({
+    "@type": "Question",
+    name: q,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: a.replace(/<[^>]+>/g, ""),
+    },
+  })),
+};
+
+const webSiteLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "spannora",
+  url: "https://spannora.dev",
+};
+---
+
+<BaseLayout
+  title={title}
+  description={description}
+  jsonLd={[softwareApplicationLd, faqPageLd, webSiteLd]}
+>
+  <Hero
+    eyebrow="open source · self-hosted · PWA"
+    title="A web UI for Claude Code, on your own VM"
+    subtitle="spannora is a self-hosted web chat for Claude Code. Run it on a Linux VM with one curl command, then drive Claude from any browser or phone — with the full agent toolset, persistent sessions, and HTTPS out of the box."
+  >
+    <a slot="cta" href="/app/" class="btn btn-primary">Open the hub →</a>
+    <a slot="cta" href="/docs/install/" class="btn">Install on your VM</a>
+    <div slot="visual">
+      <InstallBlock command={installCommand} />
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.75rem 0 0;">
+        Runs on any Linux VM with port 80/443 open. Auto-provisions HTTPS via Let's Encrypt.
+      </p>
+    </div>
+  </Hero>
+
+  <section>
+    <div class="container">
+      <h2>Why a web UI for Claude Code?</h2>
+      <p class="lead">
+        Claude Code is great in your terminal. But terminals don't follow you to your phone, don't survive a laptop closing, and don't let you check on a long-running agent from the couch. spannora puts the same Claude — same tools, same auth, same prompt — behind a browser tab on whatever device is in your hand.
+      </p>
+      <div style="margin-top: 2.5rem;">
+        <FeatureGrid features={features} />
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>One command to install</h2>
+      <p class="lead">
+        Point your terminal at a fresh Linux VM and run:
+      </p>
+      <div style="max-width: 760px; margin-top: 1.5rem;">
+        <InstallBlock command={installCommand} />
+      </div>
+      <p style="margin-top: 1rem; color: var(--text-muted);">
+        The installer detects existing reverse proxies (Caddy, nginx) or installs Caddy fresh, provisions a Let's Encrypt certificate on an <code>sslip.io</code> hostname by default, and starts a systemd service. First boot prints a one-time setup token. Visit <code>https://&lt;your-vm&gt;/setup</code>, paste it, and you're chatting.
+      </p>
+      <p>
+        <a href="/docs/install/">Full install guide →</a>
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>Your VM, your auth, your data</h2>
+      <p class="lead">
+        spannora ships with bcrypt password auth, HttpOnly cookie sessions, optional long-lived bearer tokens for cross-origin hub access, and a setup token printed once on first boot. All conversations live in SQLite + JSONL on your disk. Nothing leaves your server except calls to the Claude API.
+      </p>
+      <p>
+        <a href="/docs/security/">Read the security model →</a>
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <FAQ items={faqItems} />
+    </div>
+  </section>
+</BaseLayout>

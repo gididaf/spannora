@@ -1,0 +1,97 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: "Install spannora — Claude Code web UI on your VM"
+description: "Install the spannora self-hosted Claude Code web UI on a Linux VM in one command. Covers the one-line installer, custom domains, reverse proxies, and manual deploy."
+breadcrumb: "Install"
+---
+
+# Install spannora on a Linux VM
+
+This guide gets a fresh Linux VM running spannora — a self-hosted web UI for Claude Code — in about five minutes. You'll end up with HTTPS, a systemd service, password authentication, and a browser-reachable chat at your VM's hostname.
+
+## Requirements
+
+- A Linux VM you can SSH into as root (Ubuntu, Debian, Rocky, Alma — anything systemd).
+- Ports **80** and **443** reachable from the public internet (the installer provisions a Let's Encrypt certificate via HTTP-01).
+- An Anthropic account with Claude Code access or API credit.
+
+That's it. No prior Caddy / nginx / Docker / Node install needed — the installer brings what it needs.
+
+## One-line install
+
+Run this on the VM:
+
+```bash
+curl -fsSL https://spannora.dev/install.sh | bash
+```
+
+What it does:
+
+1. Downloads the latest spannora release tarball from GitHub.
+2. Extracts to `/opt/spannora/`, installs runtime dependencies (`npm install --omit=dev`).
+3. Sets up a systemd service (`spannora.service`, runs as root) and a SQLite database at `/var/lib/spannora/spannora.db`.
+4. Detects whether you already have nginx or Caddy. If neither, installs Caddy.
+5. Provisions HTTPS automatically — `sslip.io` hostname by default (`<your-vm-ip>.sslip.io`), Let's Encrypt cert.
+6. Prints a one-time **setup token** in a banner.
+
+Visit `https://<your-vm-ip>.sslip.io/setup`, paste the setup token, create your account, and you're in.
+
+## Custom domain
+
+Point an A record at your VM, then run:
+
+```bash
+SPANNORA_DOMAIN=chat.example.com curl -fsSL https://spannora.dev/install.sh | bash
+```
+
+The installer will configure the proxy and request a certificate for that hostname instead of `sslip.io`.
+
+## Other install options
+
+The installer respects a handful of environment variables. Set them before piping into bash:
+
+| Variable | Purpose |
+|---|---|
+| `SPANNORA_DOMAIN` | Custom hostname (otherwise auto-derived from public IP via sslip.io). |
+| `SPANNORA_PORT` | Local port to bind the Node process (default `7878`). |
+| `SPANNORA_NO_PROXY=1` | Skip reverse-proxy setup entirely. You handle TLS yourself. |
+| `SPANNORA_NO_HTTPS=1` | nginx path only — skip certbot. |
+| `SPANNORA_ACME_EMAIL` | Email registered with Let's Encrypt. |
+| `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin hub access). |
+
+## Reverse-proxy detection
+
+- **No proxy running** → the installer installs Caddy and configures it.
+- **nginx already running** → the installer writes `/etc/nginx/conf.d/spannora.conf` and runs `certbot --nginx`.
+- **Apache or other proxy** → the installer warns and skips proxy setup. You wire it up.
+
+## After install
+
+Authenticate Claude Code with `/login` so spannora can call the SDK. The Agent SDK ships its own CLI bundled inside spannora — you don't need a separate Claude Code install:
+
+```bash
+sudo node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+```
+
+Follow the `/login` flow once. spannora then resumes Claude Code sessions normally on every chat.
+
+## Updating
+
+Re-run the same install command. The installer is idempotent and pulls the latest release tarball.
+
+## Uninstall
+
+```bash
+systemctl stop spannora && systemctl disable spannora
+rm -rf /opt/spannora /var/lib/spannora /etc/systemd/system/spannora.service
+```
+
+Proxy config (`/etc/caddy/conf.d/spannora.caddy` or `/etc/nginx/conf.d/spannora.conf`) survives — remove manually if you want a clean slate.
+
+## Manual install
+
+If you'd rather not run a third-party installer, grab the tarball from the [releases page](https://github.com/gididaf/spannora/releases) and follow the [manual deploy guide](https://github.com/gididaf/spannora/blob/main/packages/server/deploy/DEPLOY.md) in the repo.
+
+---
+
+Next: [The spannora hub →](/docs/hub/)

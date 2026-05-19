@@ -2,13 +2,14 @@
 
 Self-hosted web chat for [Claude Code](https://docs.claude.com/en/docs/claude-code/sdk). Runs on a Linux VM, talks to Claude via the Agent SDK, accessed in a browser (PWA-installable). Personal tool for controlling Claude on remote VMs from any device.
 
-Since v0.5.0 the repo is a **monorepo** with three workspaces:
+The repo is a **monorepo** with four workspaces:
 
 - `packages/server` — the spannora backend (TypeScript, runs on the VM)
 - `packages/shared` — frontend modules shared between the in-server PWA and the hub
 - `packages/hub` — a standalone hub PWA that manages multiple spannora backends from one app
+- `packages/site` — the marketing + docs site at `spannora.dev` (Astro, static; deployed to GitHub Pages alongside the hub at `/app/`)
 
-Each spannora install is still self-contained; the hub is optional and additive.
+Each spannora install is still self-contained; the hub is optional and additive. The site is purely informational.
 
 ## Identity
 
@@ -34,7 +35,10 @@ Each spannora install is still self-contained; the hub is optional and additive.
 | Hub bootstrap, hash routing, instance switching | `packages/hub/src/main.js` |
 | Hub IndexedDB layer + instance CRUD | `packages/hub/src/storage.js`, `packages/hub/src/instances.js` |
 | Hub bearer-authed client wrapper | `packages/hub/src/client.js` |
-| Hub Pages deploy workflow | `.github/workflows/deploy-hub.yml` |
+| Marketing + docs site (Astro static, served at `spannora.dev`) | `packages/site/` |
+| Site BaseLayout (all SEO meta, JSON-LD, inline CSS) | `packages/site/src/layouts/BaseLayout.astro` |
+| Site landing page (primary kw: "Claude Code web UI") | `packages/site/src/pages/index.astro` |
+| Combined site + hub Pages deploy workflow | `.github/workflows/deploy-pages.yml` |
 | One-line installer (Caddy/nginx auto, certbot, sslip.io) | `install.sh` |
 | Manual deploy reference | `packages/server/deploy/DEPLOY.md` |
 | systemd unit (runs as root) | `packages/server/deploy/spannora.service` |
@@ -80,24 +84,26 @@ Open `http://localhost:5173/` (not `127.0.0.1:5173/` — see CORS section). Add 
 
 ## Release flow
 
+The marketing site and hub PWA ship continuously: **every push to `main`** triggers `deploy-pages.yml`, which builds `packages/site/` (Astro), stages it into `_site/` with the hub mounted under `_site/app/` and `install.sh` at `_site/install.sh`, then publishes to GitHub Pages. Custom domain is `spannora.dev` (apex; `www` 301s to apex). The combined artifact lands at `https://spannora.dev/`, `https://spannora.dev/app/` (hub), and `https://spannora.dev/install.sh` (installer).
+
+Server tarball releases remain **tag-driven and independent** of the Pages deploy:
+
 ```bash
 # 1. Bump version in the root package.json
 # 2. Build the server tarball
 npm run package          # → spannora-<version>.tar.gz at repo root
-# 3. Commit, tag, and push the tag — the deploy-hub.yml workflow
-#    fires on v* tags and publishes the matching hub.
+# 3. Commit + push to main (also triggers a Pages deploy with the new site/hub state)
+# 4. Tag and push the tag (purely for the GitHub release artifact)
 git tag vX.Y.Z && git push --tags
-# 4. Cut the GitHub release (shtum-wrapped token)
+# 5. Cut the GitHub release (shtum-wrapped token)
 shtum run -- bash -c 'GH_TOKEN={GH_TOKEN} gh release create vX.Y.Z \
    spannora-X.Y.Z.tar.gz --title "..." --notes-file ...'
-# 5. Delete the local tarball
+# 6. Delete the local tarball
 ```
 
-One tag = server tarball release + hub Pages deploy. Hub lands at `https://gididaf.github.io/spannora/`.
+The installer fetches `/releases/latest` so whatever tag you create becomes the new install target. The user-facing install URL is `https://spannora.dev/install.sh` (copied into `_site/` by the workflow); the fallback raw URL still works (`raw.githubusercontent.com/gididaf/spannora/main/install.sh`) but has a ~5 min CDN cache.
 
-The installer fetches `/releases/latest` so whatever tag you create becomes the new install target. **GitHub raw URL has a ~5 min CDN cache** — if `install.sh` keeps fetching the old version after a release, wait it out or hit the tag URL directly (`raw.githubusercontent.com/gididaf/spannora/vX.Y.Z/install.sh`).
-
-GitHub Pages source for the repo must be set to "GitHub Actions" (Settings → Pages → Build and deployment → Source) once, before the first deploy works.
+GitHub Pages source for the repo must be set to "GitHub Actions" (Settings → Pages → Build and deployment → Source) once, before the first deploy works. The custom domain (`spannora.dev`) is set in Settings → Pages → Custom domain; the artifact also writes a `CNAME` file via `packages/site/public/CNAME` as belt-and-suspenders.
 
 ## Deployment topology
 
@@ -154,7 +160,7 @@ Setup token (24 random bytes, base64url) printed in a banner on first boot. `SPA
 `packages/server/src/cors.ts` runs at the top of the request handler, **before** the auth gate. Env-pinned allowlist:
 
 ```
-SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io,http://localhost:5173
+SPANNORA_ALLOWED_ORIGINS=https://spannora.dev,http://localhost:5173
 ```
 
 - **No default.** Unset → no CORS headers emitted → existing same-origin flows are byte-identical to pre-v0.5.0. The hub will fail to reach the install until the operator opts in.
@@ -167,7 +173,7 @@ If a cross-origin client gets a CORS error, the failure mode is always: response
 
 ## Hub PWA
 
-A static SPA at `https://gididaf.github.io/spannora/` (or any self-hosted copy). Anyone can use the public hub or self-host their own — the hub has no backend state.
+A static SPA at `https://spannora.dev/app/` (or any self-hosted copy). Anyone can use the public hub or self-host their own — the hub has no backend state.
 
 **Per-instance config in IndexedDB** (`spannora-hub` DB, v1):
 
@@ -191,7 +197,7 @@ settings     keyPath="key"
 
 **Hub gotchas:**
 
-- **`scope` and `start_url`** in `manifest.webmanifest` are relative `./` so the same hub works both at `/spannora/` (Pages) and `/` (local dev).
+- **`scope` and `start_url`** in `manifest.webmanifest` are relative `./` so the same hub works both at `/app/` (production at spannora.dev) and `/` (local dev). `id: "spannora-hub"` is set so the PWA install identity stays stable across future origin moves.
 - **SW cache name** is `spannora-hub-v*` — namespaced so the hub PWA and any per-server spannora PWA can coexist on the same device without cache collision.
 - **Never intercept cross-origin requests** in the SW. The fetch handler bails on `url.origin !== self.location.origin` so SSE streaming + bearer auth always hit live.
 - **Mobile drawer math**: the conv sidebar is `position: fixed; left: 56px; width: calc(80% - 56px)`. Closed transform is `translateX(calc(-100% - 56px))` — translating by just `-100%` or `-110%` leaves the drawer's right edge overlapping the rail (the `left: 56px` offset doesn't get subtracted by % translates).

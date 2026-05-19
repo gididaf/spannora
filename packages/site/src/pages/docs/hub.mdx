@@ -1,0 +1,87 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: "The spannora hub — manage multiple Claude Code instances"
+description: "Set up the spannora hub PWA to manage multiple self-hosted Claude Code instances from one screen. Bearer-token auth, mixed-content handling, IndexedDB-backed instance config."
+breadcrumb: "Hub"
+---
+
+# The spannora hub
+
+The hub is a standalone PWA at [spannora.dev/app/](/app/) that lets you manage multiple spannora installs from one interface. Each install runs on its own VM with its own auth; the hub is a thin client that knows how to talk to all of them.
+
+You can use the public hub or [self-host](https://github.com/gididaf/spannora/tree/main/packages/hub) your own copy — they're functionally identical. The hub has no backend state of its own.
+
+## When you'd use the hub
+
+- You run spannora on more than one VM (dev, staging, sandbox).
+- You want one PWA install on your phone that switches between machines.
+- You want to manage the instances without bookmarking each one.
+
+If you only have one spannora, the per-server PWA at `https://<your-vm>/` works fine and you don't need the hub.
+
+## Per-install setup (CORS opt-in)
+
+The hub talks to your spannora across origins, so each install you want to manage needs to allow the hub's origin. On the VM:
+
+```bash
+SPANNORA_ALLOWED_ORIGINS=https://spannora.dev systemctl restart spannora
+```
+
+Or edit `/etc/systemd/system/spannora.service` to add:
+
+```
+Environment="SPANNORA_ALLOWED_ORIGINS=https://spannora.dev"
+```
+
+Then `systemctl daemon-reload && systemctl restart spannora`.
+
+Without this, the browser will refuse cross-origin requests and the hub will show a CORS error.
+
+## Adding an instance to the hub
+
+Open [spannora.dev/app/](/app/) and tap the `+` button on the left rail. Enter:
+
+- **URL** — the public URL of your spannora install (e.g. `https://chat.example.com`).
+- **Username and password** — the credentials you set during the per-install setup.
+- **Label and color** — for the rail chip; pick something distinctive.
+
+The hub posts to `/api/auth/token` on the target install, gets back a long-lived bearer token, and stores `{ id, base_url, label, color, token }` in IndexedDB (`spannora-hub` DB, version 1).
+
+## What lives where
+
+| Surface | Where |
+|---|---|
+| Instance config (URL, label, token) | Hub's IndexedDB, per-origin |
+| Conversations and messages | Each spannora's SQLite, per-VM |
+| Claude session state | Each VM's `~/.claude/` |
+| Bearer-token rows | Each spannora's `sessions` table, `kind='token'` |
+
+The hub has zero server-side state. Switching browsers = re-add instances. Sync across devices is on you (export/import is a planned feature).
+
+## Removing an instance
+
+Right-click (or long-press) an instance chip in the rail. Remove only forgets the instance locally — the bearer token on the server is **not** revoked. To kill the token, log into the spannora install directly (same-origin) and revoke the matching session from the account modal.
+
+## Mixed content
+
+The hub is served over HTTPS. If you try to add an HTTP spannora install, the hub will refuse before making any network request. There's no workaround — browsers actively block mixed content. If you need to test against a plain-HTTP install, run the hub locally with `npm run dev -w packages/hub` (which serves over HTTP).
+
+## Self-hosting the hub
+
+The hub is just static files. Clone the repo, copy `packages/hub/` to any static host (with the `packages/hub/shared` symlink dereferenced), and you have your own private hub.
+
+```bash
+git clone https://github.com/gididaf/spannora
+cd spannora
+cp -rL packages/hub /var/www/spannora-hub
+```
+
+The manifest uses relative `./` paths so the hub works at any base path.
+
+## Mobile install
+
+On iOS / Android, open `spannora.dev/app/` in the system browser (Safari on iOS, Chrome on Android) and tap "Add to Home Screen." The PWA installs with the identity `spannora-hub` and runs in standalone mode. Same UI as the desktop browser, with safe-area padding for the iOS notch and Android nav buttons.
+
+---
+
+Next: [Security model →](/docs/security/)

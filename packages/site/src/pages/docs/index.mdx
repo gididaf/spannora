@@ -1,0 +1,28 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: "spannora docs — Self-hosted Claude Code web UI"
+description: "Documentation for spannora: install on a VM, configure the hub, understand the security model, and answers to common questions about running Claude Code as a web app."
+---
+
+# spannora docs
+
+spannora is a self-hosted web UI for Claude Code. These pages cover installing it on a Linux VM, setting up the standalone hub for multiple instances, the security and auth model, and frequently asked questions.
+
+## Start here
+
+- **[Install spannora](/docs/install/)** — one-line installer, manual deploy, custom domains, reverse proxy details.
+- **[The spannora hub](/docs/hub/)** — manage multiple spannora installs from one PWA at `spannora.dev/app/`.
+- **[Security model](/docs/security/)** — authentication, the root-by-design rationale, CORS, bearer tokens.
+- **[FAQ](/docs/faq/)** — common questions about Claude Code in the browser, mobile, costs, and limitations.
+
+## Beyond the docs
+
+The source lives at [github.com/gididaf/spannora](https://github.com/gididaf/spannora). Issues and feature requests go there. The hub PWA is at [spannora.dev/app/](/app/) — bring your own spannora instance URL and bearer token.
+
+For a quickstart: provision any Linux VM with ports 80/443 open, point your DNS at it (or skip DNS and use the default `sslip.io` hostname), then run:
+
+```bash
+curl -fsSL https://spannora.dev/install.sh | bash
+```
+
+The installer takes care of HTTPS, a systemd service, the SQLite database, and a setup token. Five minutes from a fresh VM to a working chat.

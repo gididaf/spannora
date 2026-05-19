@@ -1,0 +1,65 @@
+---
+interface QA {
+  q: string;
+  a: string;
+}
+interface Props {
+  items: QA[];
+  heading?: string;
+}
+const { items, heading = "Frequently asked questions" } = Astro.props;
+---
+
+<div class="faq">
+  <h2>{heading}</h2>
+  <div class="faq-list">
+    {items.map(({ q, a }) => (
+      <details class="faq-item">
+        <summary>{q}</summary>
+        <div class="faq-answer" set:html={a} />
+      </details>
+    ))}
+  </div>
+</div>
+
+<style>
+  .faq h2 { margin-bottom: 1.5rem; }
+  .faq-list {
+    display: grid;
+    gap: 0.6rem;
+    max-width: 800px;
+  }
+  .faq-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .faq-item summary {
+    cursor: pointer;
+    padding: 1rem 1.25rem;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    list-style: none;
+    gap: 1rem;
+  }
+  .faq-item summary::-webkit-details-marker { display: none; }
+  .faq-item summary::after {
+    content: "+";
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    font-weight: 400;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .faq-item[open] summary::after { content: "\2013"; }
+  .faq-answer {
+    padding: 0 1.25rem 1.25rem;
+    color: var(--text-muted);
+  }
+  .faq-answer :global(p) { margin: 0 0 0.75rem; }
+  .faq-answer :global(p:last-child) { margin-bottom: 0; }
+  .faq-answer :global(a) { color: var(--accent); }
+</style>

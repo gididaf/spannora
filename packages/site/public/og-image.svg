@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f1115"/>
+      <stop offset="1" stop-color="#181b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6ea8fe"/>
+      <stop offset="1" stop-color="#4f8cff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <g transform="translate(80 200)">
+    <circle cx="22" cy="22" r="22" fill="url(#accent)"/>
+    <text x="60" y="36" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="48" font-weight="700" fill="#e8e8ec" letter-spacing="-1.5">spannora</text>
+  </g>
+  <text x="80" y="340" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="68" font-weight="700" fill="#e8e8ec" letter-spacing="-2">A web UI for Claude Code</text>
+  <text x="80" y="410" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="32" font-weight="500" fill="#9aa0aa">Self-hosted. Mobile-ready. Open source.</text>
+  <g transform="translate(80 490)">
+    <rect width="640" height="60" rx="10" fill="#181b22" stroke="#2a2e38"/>
+    <text x="20" y="40" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="22" fill="#6ea8fe">curl -fsSL spannora.dev/install.sh | bash</text>
+  </g>
+  <text x="1120" y="600" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="600" fill="#9aa0aa" text-anchor="end">spannora.dev</text>
+</svg>

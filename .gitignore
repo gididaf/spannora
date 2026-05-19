@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.astro/
+_site/
 *.tar.gz
 .DS_Store
 *.log

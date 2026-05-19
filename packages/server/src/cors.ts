@@ -4,9 +4,9 @@ import http from "node:http";
 // env (the default) ⇒ no CORS headers are emitted at all and cross-origin
 // requests just fail the way they always have. The hub PWA needs the
 // operator to opt in by setting e.g.
-//   SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io
+//   SPANNORA_ALLOWED_ORIGINS=https://spannora.dev
 // in the systemd unit's Environment=, or
-//   SPANNORA_ALLOWED_ORIGINS=https://gididaf.github.io,http://localhost:5173
+//   SPANNORA_ALLOWED_ORIGINS=https://spannora.dev,http://localhost:5173
 // for local dev against a locally-served hub.
 //
 // Exact match. No wildcards, no subdomain magic.

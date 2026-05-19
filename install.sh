@@ -4,7 +4,7 @@
 # Idempotent — re-run to upgrade in place. Preserves SQLite data and
 # Claude Code auth across upgrades.
 #
-#   curl -fsSL https://raw.githubusercontent.com/gididaf/spannora/main/install.sh | sudo bash
+#   curl -fsSL https://spannora.dev/install.sh | sudo bash
 #
 # Environment overrides:
 #   SPANNORA_DOMAIN      Use this hostname instead of <public-ip>.sslip.io

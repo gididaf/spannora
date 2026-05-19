@@ -1,0 +1,323 @@
+---
+import Footer from "../components/Footer.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  ogImage?: string;
+  ogType?: "website" | "article";
+  noindex?: boolean;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
+}
+
+const SITE_NAME = "spannora";
+const SITE_URL = "https://spannora.dev";
+
+const {
+  title,
+  description,
+  ogImage = "/og-image.svg",
+  ogType = "website",
+  noindex = false,
+  jsonLd,
+} = Astro.props;
+
+const canonical = new URL(Astro.url.pathname, SITE_URL).href;
+const ogImageUrl = new URL(ogImage, SITE_URL).href;
+
+const organizationLd = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: SITE_NAME,
+  url: SITE_URL,
+  logo: `${SITE_URL}/favicon.svg`,
+};
+
+const extra = jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : [];
+const allLd: Record<string, unknown>[] = [organizationLd, ...extra];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {noindex && <meta name="robots" content="noindex,nofollow" />}
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="color-scheme" content="dark" />
+
+    <meta property="og:type" content={ogType} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content={SITE_NAME} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImageUrl} />
+
+    {allLd.map((data) => (
+      <script type="application/ld+json" set:html={JSON.stringify(data)} />
+    ))}
+
+    <style is:global>
+      :root {
+        --bg: #0f1115;
+        --surface: #181b22;
+        --surface-2: #20242d;
+        --border: #2a2e38;
+        --text: #e8e8ec;
+        --text-muted: #9aa0aa;
+        --accent: #6ea8fe;
+        --accent-strong: #4f8cff;
+        --max-width: 1100px;
+        --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        --radius: 10px;
+      }
+
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        font-family: var(--font-sans);
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      img { max-width: 100%; height: auto; display: block; }
+
+      .container {
+        max-width: var(--max-width);
+        margin: 0 auto;
+        padding: 0 1.25rem;
+      }
+
+      .site-header {
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: rgba(15, 17, 21, 0.88);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        z-index: 10;
+      }
+      .site-header .container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 64px;
+      }
+      .brand {
+        font-weight: 700;
+        color: var(--text);
+        font-size: 1.15rem;
+        letter-spacing: -0.01em;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .brand:hover { text-decoration: none; }
+      .brand-dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        align-items: center;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .nav-links a {
+        color: var(--text-muted);
+        font-weight: 500;
+        font-size: 0.95rem;
+      }
+      .nav-links a:hover { color: var(--text); text-decoration: none; }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.125rem;
+        border-radius: var(--radius);
+        font-weight: 600;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 0.95rem;
+        transition: background 120ms ease, border-color 120ms ease;
+        text-decoration: none;
+      }
+      .btn:hover { background: var(--surface-2); text-decoration: none; }
+      .btn-primary {
+        background: var(--accent-strong);
+        border-color: var(--accent-strong);
+        color: #0a0d12;
+      }
+      .btn-primary:hover {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #0a0d12;
+      }
+
+      h1, h2, h3, h4 {
+        margin: 0 0 0.6em;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+        color: var(--text);
+      }
+      h1 { font-size: clamp(2rem, 5vw, 3.25rem); letter-spacing: -0.03em; }
+      h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
+      h3 { font-size: 1.2rem; }
+      h4 { font-size: 1rem; }
+      p { margin: 0 0 1rem; }
+      .lead { font-size: 1.15rem; color: var(--text-muted); max-width: 40em; }
+
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        background: var(--surface);
+        padding: 0.15em 0.4em;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+      }
+      pre {
+        background: var(--surface);
+        padding: 1rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        overflow-x: auto;
+        line-height: 1.5;
+        font-size: 0.92rem;
+      }
+      pre code { background: none; border: none; padding: 0; font-size: inherit; }
+
+      section { padding: 4rem 0; }
+      section.tight { padding: 2.5rem 0; }
+
+      .site-footer {
+        border-top: 1px solid var(--border);
+        padding: 3rem 0 2rem;
+        margin-top: 5rem;
+        color: var(--text-muted);
+        font-size: 0.92rem;
+      }
+      .footer-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr;
+        gap: 2.5rem;
+      }
+      .footer-grid h4 {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--text-muted);
+        margin-bottom: 0.85rem;
+        font-weight: 600;
+      }
+      .footer-grid ul { list-style: none; padding: 0; margin: 0; }
+      .footer-grid li { margin-bottom: 0.45rem; }
+      .footer-grid a { color: var(--text); font-weight: 500; }
+      .footer-grid a:hover { color: var(--accent); }
+      .footer-tag { color: var(--text-muted); margin-top: 0.5rem; max-width: 32em; }
+
+      .prose {
+        max-width: 70ch;
+        margin: 0 auto;
+      }
+      .prose h2 { margin-top: 2.4em; }
+      .prose h3 { margin-top: 1.8em; }
+      .prose ul, .prose ol { margin: 0 0 1rem 1.25em; padding: 0; }
+      .prose li { margin-bottom: 0.4em; }
+      .prose pre { margin: 1.25rem 0; }
+      .prose hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+      .prose blockquote {
+        border-left: 3px solid var(--accent);
+        margin: 1.25rem 0;
+        padding: 0.5rem 1rem;
+        color: var(--text-muted);
+        background: var(--surface);
+        border-radius: 0 var(--radius) var(--radius) 0;
+      }
+      .prose table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 1.25rem 0;
+      }
+      .prose th, .prose td {
+        border: 1px solid var(--border);
+        padding: 0.55rem 0.8rem;
+        text-align: left;
+      }
+      .prose th { background: var(--surface); font-weight: 600; }
+
+      .skip-link {
+        position: absolute;
+        top: -40px;
+        left: 0;
+        background: var(--accent);
+        color: #0a0d12;
+        padding: 0.55rem 1rem;
+        border-radius: 0 0 var(--radius) 0;
+        font-weight: 600;
+        z-index: 100;
+      }
+      .skip-link:focus { top: 0; }
+
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+        border-radius: 4px;
+      }
+
+      @media (max-width: 720px) {
+        .nav-links { gap: 1rem; font-size: 0.9rem; }
+        .footer-grid { grid-template-columns: 1fr 1fr; }
+        section { padding: 3rem 0; }
+      }
+      @media (max-width: 480px) {
+        .footer-grid { grid-template-columns: 1fr; gap: 1.5rem; }
+        .nav-links .nav-desktop { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to content</a>
+    <header class="site-header">
+      <div class="container">
+        <a href="/" class="brand"><span class="brand-dot" aria-hidden="true"></span>spannora</a>
+        <ul class="nav-links">
+          <li class="nav-desktop"><a href="/docs/install/">Install</a></li>
+          <li class="nav-desktop"><a href="/docs/security/">Security</a></li>
+          <li class="nav-desktop"><a href="/docs/faq/">FAQ</a></li>
+          <li><a href="https://github.com/gididaf/spannora" rel="noopener">GitHub</a></li>
+          <li><a href="/app/" class="btn btn-primary" style="padding:0.4rem 0.85rem;font-size:0.9rem;">Open hub</a></li>
+        </ul>
+      </div>
+    </header>
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>
