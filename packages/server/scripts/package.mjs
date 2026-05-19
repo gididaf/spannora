@@ -31,7 +31,9 @@ function run(cmd, opts = {}) {
 }
 
 function copyTree(src, dest) {
-  fs.cpSync(src, dest, { recursive: true });
+  // dereference: true so that public/shared (symlink → ../../shared/src)
+  // is staged as real files inside the tarball.
+  fs.cpSync(src, dest, { recursive: true, dereference: true });
 }
 
 // 1. Set up staging dirs and clean any previous tarball.

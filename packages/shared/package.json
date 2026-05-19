@@ -1,0 +1,10 @@
+{
+  "name": "@spannora/shared",
+  "private": true,
+  "description": "Frontend modules shared by the in-server PWA and the standalone hub PWA. Vanilla JS, no build step.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  }
+}
