@@ -1,26 +1,17 @@
 {
-  "name": "spannora",
+  "name": "spannora-monorepo",
   "version": "0.4.2",
   "private": true,
-  "description": "Self-hosted web chat for Claude Code (Agent SDK)",
-  "type": "module",
+  "description": "Self-hosted web chat for Claude Code (Agent SDK). Server + hub PWA + shared frontend modules.",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "package": "node scripts/package.mjs"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
-    "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.10.0"
-  },
-  "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.0.0",
-    "tsx": "^4.20.0",
-    "typescript": "^5.6.0"
+    "dev": "npm run dev -w packages/server",
+    "build": "npm run build -w packages/server",
+    "start": "npm run start -w packages/server",
+    "package": "npm run package -w packages/server",
+    "typecheck": "tsc -b packages/server"
   },
   "engines": {
     "node": ">=20"
