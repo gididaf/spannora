@@ -21,21 +21,34 @@ If you only have one spannora, the per-server PWA at `https://<your-vm>/` works 
 
 ## Per-install setup (CORS opt-in)
 
-The hub talks to your spannora across origins, so each install you want to manage needs to allow the hub's origin. On the VM:
+The hub talks to your spannora across origins, so each install you want to manage needs to allow the hub's origin. The cleanest way is to re-run the installer with the var set — it'll write a systemd drop-in that survives future upgrades:
 
 ```bash
-SPANNORA_ALLOWED_ORIGINS=https://spannora.dev systemctl restart spannora
+curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_ALLOWED_ORIGINS=https://spannora.dev bash
 ```
 
-Or edit `/etc/systemd/system/spannora.service` to add:
+The variable must be on the **bash** at the tail of the pipe, not the `curl`. `SPANNORA_ALLOWED_ORIGINS=... curl ... | bash` does nothing — the var lives in curl's environment and never reaches bash. See [install docs](/docs/install/#passing-env-vars-correctly) for the full explanation.
 
+To clear the allowlist later, re-run the installer with the variable **unset** — the drop-in is removed.
+
+If you'd rather skip the installer round-trip, write the drop-in directly on the VM:
+
+```bash
+sudo mkdir -p /etc/systemd/system/spannora.service.d
+sudo tee /etc/systemd/system/spannora.service.d/origins.conf >/dev/null <<'EOF'
+[Service]
+Environment=SPANNORA_ALLOWED_ORIGINS=https://spannora.dev
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart spannora
 ```
-Environment="SPANNORA_ALLOWED_ORIGINS=https://spannora.dev"
+
+Without this, the browser will refuse cross-origin requests and the hub will show a CORS error. Verify it took with:
+
+```bash
+curl -i -X OPTIONS https://<your-spannora-host>/api/auth/status -H 'Origin: https://spannora.dev'
 ```
 
-Then `systemctl daemon-reload && systemctl restart spannora`.
-
-Without this, the browser will refuse cross-origin requests and the hub will show a CORS error.
+A `204` with an `Access-Control-Allow-Origin: https://spannora.dev` header means you're good.
 
 ## Adding an instance to the hub
 

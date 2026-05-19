@@ -7,11 +7,14 @@
 #   curl -fsSL https://spannora.dev/install.sh | sudo bash
 #
 # Environment overrides:
-#   SPANNORA_DOMAIN      Use this hostname instead of <public-ip>.sslip.io
-#   SPANNORA_NO_PROXY    Skip all reverse-proxy install/config
-#   SPANNORA_NO_HTTPS    On nginx hosts, skip the certbot/HTTPS step
-#   SPANNORA_ACME_EMAIL  Email used when registering with Let's Encrypt
-#                        (default: anonymous registration, no expiry notices)
+#   SPANNORA_DOMAIN           Use this hostname instead of <public-ip>.sslip.io
+#   SPANNORA_NO_PROXY         Skip all reverse-proxy install/config
+#   SPANNORA_NO_HTTPS         On nginx hosts, skip the certbot/HTTPS step
+#   SPANNORA_ACME_EMAIL       Email used when registering with Let's Encrypt
+#                             (default: anonymous registration, no expiry notices)
+#   SPANNORA_ALLOWED_ORIGINS  Comma-separated origins permitted to talk
+#                             cross-origin (needed for the hub PWA at
+#                             spannora.dev/app/). Re-run unset to clear.
 
 set -euo pipefail
 
@@ -277,6 +280,25 @@ ok "Dependencies installed"
 # --- systemd unit ---
 say "Installing systemd unit"
 install -m 644 "$INSTALL_DIR/deploy/spannora.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+
+# Optional CORS allowlist via a drop-in. The drop-in lives outside the
+# main unit so future installer runs don't clobber it; the env var is
+# the source of truth — re-run with it unset to clear the allowlist.
+DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+ORIGINS_DROPIN="${DROPIN_DIR}/origins.conf"
+if [[ -n "${SPANNORA_ALLOWED_ORIGINS:-}" ]]; then
+  say "Configuring CORS allowlist: ${SPANNORA_ALLOWED_ORIGINS}"
+  mkdir -p "$DROPIN_DIR"
+  cat > "$ORIGINS_DROPIN" <<EOF
+[Service]
+Environment=SPANNORA_ALLOWED_ORIGINS=${SPANNORA_ALLOWED_ORIGINS}
+EOF
+elif [[ -f "$ORIGINS_DROPIN" ]]; then
+  say "Clearing previous CORS allowlist drop-in"
+  rm -f "$ORIGINS_DROPIN"
+  rmdir "$DROPIN_DIR" 2>/dev/null || true
+fi
+
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 systemctl restart "$SERVICE_NAME"

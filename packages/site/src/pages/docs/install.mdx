@@ -41,23 +41,39 @@ Visit `https://<your-vm-ip>.sslip.io/setup`, paste the setup token, create your 
 Point an A record at your VM, then run:
 
 ```bash
-SPANNORA_DOMAIN=chat.example.com curl -fsSL https://spannora.dev/install.sh | bash
+curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_DOMAIN=chat.example.com bash
 ```
 
 The installer will configure the proxy and request a certificate for that hostname instead of `sslip.io`.
 
 ## Other install options
 
-The installer respects a handful of environment variables. Set them before piping into bash:
+The installer respects a handful of environment variables:
 
 | Variable | Purpose |
 |---|---|
 | `SPANNORA_DOMAIN` | Custom hostname (otherwise auto-derived from public IP via sslip.io). |
-| `SPANNORA_PORT` | Local port to bind the Node process (default `7878`). |
 | `SPANNORA_NO_PROXY=1` | Skip reverse-proxy setup entirely. You handle TLS yourself. |
 | `SPANNORA_NO_HTTPS=1` | nginx path only — skip certbot. |
 | `SPANNORA_ACME_EMAIL` | Email registered with Let's Encrypt. |
-| `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin hub access). |
+| `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin [hub](/docs/hub/) access). Re-run unset to clear. |
+
+### Passing env vars correctly
+
+The variable must be set in the **bash** process at the end of the pipe, not the `curl` in front. Two shapes that work:
+
+```bash
+# inline on bash (one-shot)
+curl -fsSL https://spannora.dev/install.sh | sudo SPANNORA_ALLOWED_ORIGINS=https://spannora.dev bash
+
+# or export + sudo -E to preserve env
+export SPANNORA_ALLOWED_ORIGINS=https://spannora.dev
+curl -fsSL https://spannora.dev/install.sh | sudo -E bash
+```
+
+`SPANNORA_ALLOWED_ORIGINS=... curl ... | bash` does **not** work — the variable lives in curl's environment and never reaches bash. Same trap applies to all the variables above.
+
+The installer is idempotent: re-running with `SPANNORA_ALLOWED_ORIGINS` set writes a systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf`; re-running with it unset removes that drop-in.
 
 ## Reverse-proxy detection
 
