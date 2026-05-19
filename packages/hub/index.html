@@ -917,6 +917,20 @@
       }
 
       @media (max-width: 768px) {
+        /* Rail slides in alongside the conv drawer instead of taking a
+           permanent 56px strip. Both share the body.sidebar-open toggle,
+           so the user opens the drawer once to either switch workspace
+           or pick a conv. */
+        .rail {
+          position: fixed;
+          top: 0; bottom: 0;
+          left: 0;
+          width: 56px;
+          z-index: 91;
+          transform: translateX(-56px);
+          transition: transform 0.2s ease;
+        }
+        body.sidebar-open .rail { transform: translateX(0); }
         .sidebar {
           position: fixed;
           top: 0; bottom: 0;
@@ -924,17 +938,14 @@
           width: calc(80% - 56px);
           max-width: 320px;
           z-index: 90;
-          /* Translate by 100% of own width *plus* the 56px left offset so
-             the drawer clears the workspace rail entirely when closed.
-             Naive translateX(-100%) or -110% leaves the right edge
-             overlapping the rail. */
+          /* Translate by 100% of own width *plus* the 56px rail offset so
+             the drawer's right edge ends flush with the viewport's left
+             edge when closed (the rail slides off alongside it). */
           transform: translateX(calc(-100% - 56px));
           transition: transform 0.2s ease;
         }
         body.sidebar-open .sidebar { transform: translateX(0); }
-        /* Backdrop starts after the rail so users can switch workspaces
-           without first closing the conv drawer. */
-        .sidebar-backdrop { left: 56px; }
+        .sidebar-backdrop { left: 0; }
         body:not(.sidebar-open) .sidebar-backdrop { display: none; }
         .sidebar-close-btn { display: inline-flex; align-items: center; justify-content: center; }
         .sidebar-toggle-btn { display: inline-flex; align-items: center; justify-content: center; }
