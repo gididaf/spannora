@@ -227,7 +227,7 @@ shtum run -- bash -c 'curl -sS \
   https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records'
 ```
 
-The spannora.dev zone id is `<redacted-zone-id>`. All records stay `proxied: false` (grey-cloud) — see "DNS + GitHub Pages" below.
+Look up the spannora.dev zone id on demand with `GET /zones?name=spannora.dev` (same auth headers) — do not hardcode it. All records stay `proxied: false` (grey-cloud) — see "DNS + GitHub Pages" below.
 
 ## Marketing site (`packages/site/`)
 
@@ -245,7 +245,7 @@ Astro 5 static site served at `https://spannora.dev/`. SEO-first by construction
 
 ## DNS + GitHub Pages
 
-`spannora.dev` is registered through Cloudflare (zone id `<redacted-zone-id>`). The zone holds **six records**:
+`spannora.dev` is registered through Cloudflare. The zone holds **six records**:
 
 | Type | Name | Value | Proxied |
 |---|---|---|---|
