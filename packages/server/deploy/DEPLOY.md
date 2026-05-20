@@ -49,11 +49,24 @@ The SDK ships its own bundled CLI at that path — no separate Claude Code insta
 
 ## 4. Install the systemd unit
 
+The shipped unit is a template (`spannora.service.in`) with two placeholders that have to be substituted at install time:
+
+- `@NODE_BIN@` — absolute path to the `node` binary. systemd's default PATH excludes nvm/asdf/fnm/volta/mise dirs, so `/usr/bin/env node` fails on those hosts.
+- `@SVC_PATH@` — `PATH` the service inherits. Must include node's directory because the Agent SDK spawns a child `node <bundled-cli.js>` for each turn; without it, requests fail with "Failed to spawn Claude Code process".
+
 ```bash
-sudo cp /opt/spannora/deploy/spannora.service /etc/systemd/system/spannora.service
+NODE_BIN=$(readlink -f "$(command -v node)")
+SVC_PATH="$(dirname "$NODE_BIN"):/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+
+sudo sed -e "s#@NODE_BIN@#${NODE_BIN}#g" \
+         -e "s#@SVC_PATH@#${SVC_PATH}#g" \
+         /opt/spannora/deploy/spannora.service.in \
+  | sudo tee /etc/systemd/system/spannora.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now spannora
 ```
+
+(`install.sh` does the same `sed` and de-dupes `SVC_PATH` while preserving order.)
 
 Check:
 

@@ -41,7 +41,7 @@ Each spannora install is still self-contained; the hub is optional and additive.
 | Combined site + hub Pages deploy workflow | `.github/workflows/deploy-pages.yml` |
 | One-line installer (Caddy/nginx auto, certbot, sslip.io) | `install.sh` |
 | Manual deploy reference | `packages/server/deploy/DEPLOY.md` |
-| systemd unit (runs as root) | `packages/server/deploy/spannora.service` |
+| systemd unit template (runs as root) | `packages/server/deploy/spannora.service.in` |
 
 `packages/server/public/shared` and `packages/hub/shared` are checked-in symlinks to `packages/shared/src/`. mac/Linux only; Windows isn't supported as a dev platform.
 

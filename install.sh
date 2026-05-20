@@ -277,9 +277,52 @@ say "Installing production dependencies (this may take a minute)"
   || die "npm install failed. If better-sqlite3 fails to build, install build tools: $PM install -y build-essential python3"
 ok "Dependencies installed"
 
+# --- Resolve runtime paths for the templated unit ---
+# A static unit with `/usr/bin/env node` only works when node is on
+# systemd's default PATH (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin).
+# nvm/asdf/fnm/volta/mise all land node *outside* that set — and so does
+# any Anthropic-style ~/.local/bin install. The Agent SDK then spawns a
+# child `node <bundled-cli.js>` for each turn (see sdk.mjs ProcessTransport),
+# which inherits the unit's PATH; if node isn't on it, the request fails
+# with "Failed to spawn Claude Code process".
+# Fix: template the absolute node binary into ExecStart and set a PATH
+# override that includes node's dir + /root/.local/bin (where the official
+# Claude Code installer drops `claude`, kept here defensively for any tool
+# call that might invoke it).
+NODE_BIN=$(readlink -f "$(command -v node)")
+[[ -x "$NODE_BIN" ]] || die "Couldn't resolve node binary at '$NODE_BIN' after install."
+NODE_DIR=$(dirname "$NODE_BIN")
+
+# De-dupe while preserving order so the discovered dirs precede defaults.
+declare -A _seen=()
+SVC_PATH=""
+for d in "$NODE_DIR" /root/.local/bin /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin; do
+  [[ -n "${_seen[$d]:-}" ]] && continue
+  _seen[$d]=1
+  SVC_PATH="${SVC_PATH:+$SVC_PATH:}$d"
+done
+unset _seen
+
 # --- systemd unit ---
-say "Installing systemd unit"
-install -m 644 "$INSTALL_DIR/deploy/spannora.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+say "Installing systemd unit (node=$NODE_BIN)"
+sed -e "s#@NODE_BIN@#${NODE_BIN}#g" \
+    -e "s#@SVC_PATH@#${SVC_PATH}#g" \
+    "$INSTALL_DIR/deploy/spannora.service.in" \
+    > "/etc/systemd/system/${SERVICE_NAME}.service"
+chmod 644 "/etc/systemd/system/${SERVICE_NAME}.service"
+
+# Smoke-test the templated PATH under systemd's actual view of the unit
+# env. Today's construction guarantees node's dir is on SVC_PATH, but
+# this catches a future refactor that breaks the invariant before the
+# user sees "Failed to spawn Claude Code process" at first request.
+if command -v systemd-run >/dev/null 2>&1; then
+  if ! systemd-run --pipe --wait --quiet \
+       --property="Environment=PATH=$SVC_PATH" \
+       bash -c 'command -v node >/dev/null' 2>/dev/null; then
+    warn "Service env (PATH=$SVC_PATH) can't resolve 'node' under systemd."
+    warn "Inspect:  systemd-run --pipe --wait bash -c 'echo PATH=\$PATH; which node'"
+  fi
+fi
 
 # Optional CORS allowlist via a drop-in. The drop-in lives outside the
 # main unit so future installer runs don't clobber it; the env var is

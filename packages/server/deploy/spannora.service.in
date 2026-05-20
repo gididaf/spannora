@@ -7,8 +7,13 @@ After=network.target
 Type=simple
 WorkingDirectory=/opt/spannora
 
-# Run the compiled JS with the system node (>= 20).
-ExecStart=/usr/bin/env node /opt/spannora/dist/server.js
+# install.sh substitutes both tokens below. ExecStart uses an absolute node
+# path because systemd's default PATH excludes nvm/asdf/fnm/volta/mise dirs.
+# The PATH override is for the SDK's runtime spawn of `node <bundled-cli.js>`
+# (one per turn) — without node's dir on PATH, requests fail with
+# "Failed to spawn Claude Code process".
+ExecStart=@NODE_BIN@ /opt/spannora/dist/server.js
+Environment=PATH=@SVC_PATH@
 
 Restart=on-failure
 RestartSec=5
