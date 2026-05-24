@@ -228,6 +228,20 @@ else
   ok "Node $(node --version) already present"
 fi
 
+# --- Resolve the node binary the service (and this script) will use ---
+# Pinned up front so npm install, npm rebuild, the require() smoke test,
+# and the templated systemd unit all reference the *same* node binary.
+# `command -v node` is non-deterministic across runs when multiple Nodes
+# are installed (apt + nvm + asdf + volta + …) — the v0.6.0 regression
+# came from a host that had both `/usr/bin/node` (NodeSource 22) and an
+# nvm-managed Node 20, where the resolution flipped between installer
+# runs. Resolving once and threading NODE_BIN everywhere makes the swap
+# explicit (printed below) instead of silent.
+NODE_BIN=$(readlink -f "$(command -v node)")
+[[ -x "$NODE_BIN" ]] || die "Couldn't resolve node binary at '$NODE_BIN' after install."
+NODE_DIR=$(dirname "$NODE_BIN")
+ok "Service will run on node $("$NODE_BIN" --version) ($NODE_BIN)"
+
 # --- Latest release ---
 say "Looking up latest release of $REPO"
 release_json=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest") \
@@ -272,30 +286,34 @@ if [[ -d /var/lib/spannora ]]; then
 fi
 
 # --- npm install (prod only) ---
+# `PATH="$NODE_DIR:$PATH"` pins npm and node-gyp to the same node binary
+# the service will use, so the native build's ABI matches systemd's
+# ExecStart even when a different node leads PATH outside this subshell.
 say "Installing production dependencies (this may take a minute)"
-(cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --silent) \
+(cd "$INSTALL_DIR" && PATH="$NODE_DIR:$PATH" npm install --omit=dev --no-audit --no-fund --silent) \
   || die "npm install failed. If better-sqlite3 fails to build, install build tools: $PM install -y build-essential python3"
 
 # Force-rebuild native deps against the current Node ABI. Necessary because
 # `npm install` is a no-op when the lockfile is already satisfied (e.g. on
 # upgrade re-runs) and so it doesn't rematerialize prebuilt binaries even
 # when Node has changed under it. Without this, a host whose Node version
-# shifted between installs (Node 23 → Node 20 was the v0.6.0 regression)
+# shifted between installs (Node 22 → Node 20 was the v0.6.0 regression)
 # ends up with a NODE_MODULE_VERSION mismatch and the service crashloops on
 # `openDb()` with ERR_DLOPEN_FAILED.
-say "Rebuilding native modules for $(node --version)"
-(cd "$INSTALL_DIR" && npm rebuild better-sqlite3 --no-audit --no-fund --silent) \
+say "Rebuilding native modules for $("$NODE_BIN" --version)"
+(cd "$INSTALL_DIR" && PATH="$NODE_DIR:$PATH" npm rebuild better-sqlite3 --no-audit --no-fund --silent) \
   || die "npm rebuild better-sqlite3 failed. Install build tools: $PM install -y build-essential python3"
 
 # Fail fast at install time instead of letting systemd discover the ABI
-# mismatch via crashloop. Loads the native module under the same node
-# binary the service will use.
-if ! node -e "require('better-sqlite3')" 2>/dev/null; then
-  die "better-sqlite3 still won't load under $(node --version). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
+# mismatch via crashloop. Loads the native module under the exact binary
+# the systemd unit's ExecStart will invoke — same NODE_BIN, no daylight
+# between this check and what the service sees at runtime.
+if ! "$NODE_BIN" -e "require('better-sqlite3')" 2>/dev/null; then
+  die "better-sqlite3 still won't load under $NODE_BIN ($("$NODE_BIN" --version)). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
 fi
 ok "Dependencies installed"
 
-# --- Resolve runtime paths for the templated unit ---
+# --- Build SVC_PATH for the templated systemd unit ---
 # A static unit with `/usr/bin/env node` only works when node is on
 # systemd's default PATH (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin).
 # nvm/asdf/fnm/volta/mise all land node *outside* that set — and so does
@@ -303,13 +321,10 @@ ok "Dependencies installed"
 # child `node <bundled-cli.js>` for each turn (see sdk.mjs ProcessTransport),
 # which inherits the unit's PATH; if node isn't on it, the request fails
 # with "Failed to spawn Claude Code process".
-# Fix: template the absolute node binary into ExecStart and set a PATH
-# override that includes node's dir + /root/.local/bin (where the official
-# Claude Code installer drops `claude`, kept here defensively for any tool
-# call that might invoke it).
-NODE_BIN=$(readlink -f "$(command -v node)")
-[[ -x "$NODE_BIN" ]] || die "Couldn't resolve node binary at '$NODE_BIN' after install."
-NODE_DIR=$(dirname "$NODE_BIN")
+# Fix: template the absolute NODE_BIN (resolved up top) into ExecStart and
+# set a PATH override that includes node's dir + /root/.local/bin (where
+# the official Claude Code installer drops `claude`, kept here defensively
+# for any tool call that might invoke it).
 
 # De-dupe while preserving order so the discovered dirs precede defaults.
 declare -A _seen=()
