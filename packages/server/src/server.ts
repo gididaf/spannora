@@ -155,6 +155,14 @@ function attachSubscriber(
     "X-Accel-Buffering": "no",
   });
   res.write(": stream-open\n\n");
+  // Tell the client the broker is alive RIGHT NOW (before any replay)
+  // so attemptResume can flip the UI to "Stop" instantly on cold-reopen,
+  // without waiting for the next message frame. When the broker doesn't
+  // exist (handleStreamReattach), we emit `event: end` instead — never
+  // `event: open` — so the client knows to stay in the idle state.
+  if (!broker.ended) {
+    writeSseRaw(res, `event: open\ndata: {}\n\n`);
+  }
 
   const sub: Subscriber = { res, lastSeq: since, closed: false };
   let replayed = 0;

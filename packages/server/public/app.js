@@ -712,25 +712,27 @@ async function stopCurrentChat(conversationId) {
 // Mutates module state: lastSeq, currentController, streamPhase,
 // reconnectRequested. Caller owns the sending/UI flags.
 //
-// `onFirstFrame` (if provided) fires at most once on the first message
-// frame — attemptResume() uses this to defer flipping the UI to "Stop"
-// until we know there's actually a live turn (vs. the server's immediate
-// `event: end` when no broker exists).
-async function runStreamLoop(initialRes, onFirstFrame) {
+// `onActive` (if provided) fires at most once when the broker is
+// confirmed alive — either via the server's `event: open` frame or, as
+// a fallback, on the first message frame. attemptResume uses this to
+// flip the UI to "Stop" without waiting for actual content (so a turn
+// that's mid-stream but momentarily quiet still shows correct controls).
+async function runStreamLoop(initialRes, onActive) {
   let res = initialRes;
   let endSeen = false;
-  let firstFrameFired = false;
-  const fireFirst = () => {
-    if (firstFrameFired) return;
-    firstFrameFired = true;
-    onFirstFrame?.();
+  let activeFired = false;
+  const fireActive = () => {
+    if (activeFired) return;
+    activeFired = true;
+    onActive?.();
   };
   while (!endSeen) {
     streamPhase = "streaming";
     try {
       await streamSse(res, {
+        onOpen: () => { fireActive(); },
         onMessage: (sdkMsg, meta) => {
-          fireFirst();
+          fireActive();
           if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
           renderSdkMessage(sdkMsg, renderCtx);
         },
@@ -764,7 +766,7 @@ async function runStreamLoop(initialRes, onFirstFrame) {
       break;
     }
   }
-  return firstFrameFired;
+  return activeFired;
 }
 
 // Called from openConversation after hydrate. If the conversation's

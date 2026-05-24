@@ -304,25 +304,29 @@ function appendError(message) { append("error", message); }
 // otherwise). Mutates module state: lastSeq, currentController,
 // streamPhase, reconnectRequested. Caller owns the sending/UI flags.
 //
-// `onFirstFrame`, if provided, is invoked at most once when the first
-// real message frame arrives. attemptResume() uses this to defer
-// flipping the UI to "streaming" until we know there's actually a live
-// turn (vs. the server's immediate `event: end` when no broker exists).
-async function runStreamLoop(initialRes, onFirstFrame) {
+// `onActive`, if provided, is invoked at most once when the broker is
+// confirmed alive — either via the server's `event: open` frame (sent
+// on attach when the broker exists) or, as a fallback, on the first
+// message frame. attemptResume uses this to flip the UI to "Stop"
+// without waiting for actual content, so a turn that's mid-stream but
+// momentarily quiet (between tool calls, mid-thought) still shows the
+// correct controls when the user reopens.
+async function runStreamLoop(initialRes, onActive) {
   let res = initialRes;
   let endSeen = false;
-  let firstFrameFired = false;
-  const fireFirst = () => {
-    if (firstFrameFired) return;
-    firstFrameFired = true;
-    onFirstFrame?.();
+  let activeFired = false;
+  const fireActive = () => {
+    if (activeFired) return;
+    activeFired = true;
+    onActive?.();
   };
   while (!endSeen) {
     streamPhase = "streaming";
     try {
       await streamSse(res, {
+        onOpen: () => { fireActive(); },
         onMessage: (sdkMsg, meta) => {
-          fireFirst();
+          fireActive();
           if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
           renderSdkMessage(sdkMsg, renderCtx);
         },
@@ -361,7 +365,7 @@ async function runStreamLoop(initialRes, onFirstFrame) {
       break;
     }
   }
-  return firstFrameFired;
+  return activeFired;
 }
 
 // Called from openConversation after hydrate. If the conversation's

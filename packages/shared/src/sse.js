@@ -8,15 +8,20 @@
 //   id: <seq>          (monotonic per-message sequence — used as the
 //                       reattach cursor on visibility-resume / dropped
 //                       streams; see streamReattach in hub/src/client.js)
-//   event: message | error | end
+//   event: open | message | error | end
 //   data: <JSON>
+//
+// `event: open` fires once on attach if the server-side broker is alive
+// (no payload). attemptResume uses it to flip the UI to "streaming"
+// without waiting for the first message frame — important for turns
+// that pause mid-stream (tool calls, thinking).
 //
 // onMessage receives (parsed, meta) where meta.id is the seq number (or
 // null if the frame had no id field). onEnd is called when an `event: end`
 // frame arrives so the client knows the turn finished cleanly vs. the
 // stream just being interrupted.
 
-export async function streamSse(response, { onMessage, onError, onEnd } = {}) {
+export async function streamSse(response, { onMessage, onError, onEnd, onOpen } = {}) {
   if (!response.body) return;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -29,12 +34,12 @@ export async function streamSse(response, { onMessage, onError, onEnd } = {}) {
     while ((sepIdx = buffer.indexOf("\n\n")) !== -1) {
       const rawEvent = buffer.slice(0, sepIdx);
       buffer = buffer.slice(sepIdx + 2);
-      handleSseFrame(rawEvent, onMessage, onError, onEnd);
+      handleSseFrame(rawEvent, onMessage, onError, onEnd, onOpen);
     }
   }
 }
 
-function handleSseFrame(frame, onMessage, onError, onEnd) {
+function handleSseFrame(frame, onMessage, onError, onEnd, onOpen) {
   const lines = frame.split("\n");
   let event = "message";
   let data = "";
@@ -48,6 +53,7 @@ function handleSseFrame(frame, onMessage, onError, onEnd) {
     }
     else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trimStart();
   }
+  if (event === "open") { onOpen?.(); return; }
   if (event === "end") { onEnd?.(); return; }
   if (!data) return;
   let parsed;
