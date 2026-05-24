@@ -1,6 +1,6 @@
 {
   "name": "spannora-monorepo",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Self-hosted web chat for Claude Code (Agent SDK). Server + hub PWA + shared frontend modules.",
   "workspaces": [
