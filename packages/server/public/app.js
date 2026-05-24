@@ -226,7 +226,7 @@ function bindEvents() {
   // controller (fetch then throws "signal is aborted without reason").
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
-    if (!state.sending || !currentController) return;
+    if (!currentController) return;
     if (streamPhase !== "streaming") return;
     reconnectRequested = true;
     try { currentController.abort(); } catch { /* already aborted */ }
@@ -320,6 +320,14 @@ async function selectConversation(id) {
     alert("A response is still streaming. Cancel it first or wait for it to finish.");
     return;
   }
+  // A previous attemptResume may have a probe controller in flight
+  // (state.sending=false during the probe, so the check above didn't
+  // catch it). Abort it so its lingering frames don't render into the
+  // new transcript.
+  if (currentController) {
+    try { currentController.abort(); } catch { /* already aborted */ }
+  }
+  let messages;
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(id)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -328,18 +336,28 @@ async function selectConversation(id) {
     state.pendingCwd = null;
     location.hash = `conv-${id}`;
     clearTranscript();
-    hydrateMessages(data.messages || []);
+    messages = data.messages || [];
+    hydrateMessages(messages);
     renderCwd();
     renderSidebar();
   } catch (err) {
     append("error", `Failed to open conversation: ${err.message}`);
+    return;
   }
+  // If the SDK turn is still running server-side, attach to its live
+  // stream and resume rendering past whatever's already in DB. If the
+  // turn already ended, the server returns an immediate `event: end`
+  // and this is a silent no-op — no UI flicker.
+  await attemptResume(messages);
 }
 
 function startNewChat() {
   if (state.sending) {
     alert("A response is still streaming. Cancel it first or wait for it to finish.");
     return;
+  }
+  if (currentController) {
+    try { currentController.abort(); } catch { /* already aborted */ }
   }
   state.current = null;
   state.pendingCwd = getLastCwd();
@@ -689,6 +707,121 @@ async function stopCurrentChat(conversationId) {
   }
 }
 
+// Pump an initial SSE Response through render until `event: end`, with
+// automatic reattach on dropped reads (visibility-triggered or otherwise).
+// Mutates module state: lastSeq, currentController, streamPhase,
+// reconnectRequested. Caller owns the sending/UI flags.
+//
+// `onFirstFrame` (if provided) fires at most once on the first message
+// frame — attemptResume() uses this to defer flipping the UI to "Stop"
+// until we know there's actually a live turn (vs. the server's immediate
+// `event: end` when no broker exists).
+async function runStreamLoop(initialRes, onFirstFrame) {
+  let res = initialRes;
+  let endSeen = false;
+  let firstFrameFired = false;
+  const fireFirst = () => {
+    if (firstFrameFired) return;
+    firstFrameFired = true;
+    onFirstFrame?.();
+  };
+  while (!endSeen) {
+    streamPhase = "streaming";
+    try {
+      await streamSse(res, {
+        onMessage: (sdkMsg, meta) => {
+          fireFirst();
+          if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
+          renderSdkMessage(sdkMsg, renderCtx);
+        },
+        onError: (err) => {
+          if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
+          else append("error", err.payload?.message ?? JSON.stringify(err.payload));
+        },
+        onEnd: () => { endSeen = true; },
+      });
+    } catch (err) {
+      if (err.name === "AbortError" && !reconnectRequested) {
+        streamPhase = null;
+        throw err;
+      }
+    }
+    streamPhase = null;
+    if (endSeen) break;
+    reconnectRequested = false;
+    currentController = new AbortController();
+    try {
+      res = await apiFetch(
+        `/api/chat/${encodeURIComponent(state.current.id)}/stream?since=${lastSeq | 0}`,
+        { signal: currentController.signal },
+      );
+      if (!res.ok) {
+        append("error", `Reconnect failed: HTTP ${res.status}`);
+        break;
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") append("error", `Reconnect failed: ${err.message}`);
+      break;
+    }
+  }
+  return firstFrameFired;
+}
+
+// Called from openConversation after hydrate. If the conversation's
+// turn is still active server-side, attach and stream remaining frames;
+// if not, the server's immediate `event: end` ends the loop silently
+// (we only flip the UI to "streaming" once a real frame arrives).
+async function attemptResume(messages) {
+  let cursor = 0;
+  for (const m of messages) {
+    if (typeof m.seq === "number" && m.seq > cursor) cursor = m.seq;
+  }
+  if (!cursor || !state.current) return;
+
+  lastSeq = cursor;
+  reconnectRequested = false;
+  currentController = new AbortController();
+  const convAtStart = state.current;
+
+  let res;
+  try {
+    res = await apiFetch(
+      `/api/chat/${encodeURIComponent(state.current.id)}/stream?since=${lastSeq | 0}`,
+      { signal: currentController.signal },
+    );
+    if (!res.ok) { currentController = null; return; }
+  } catch (err) {
+    currentController = null;
+    // Silent: cold-reopen probe shouldn't surface a red error if network
+    // is flaky — the hydrated DB snapshot is still useful on its own.
+    return;
+  }
+
+  let activated = false;
+  try {
+    await runStreamLoop(res, () => {
+      if (state.current !== convAtStart) return;
+      activated = true;
+      state.sending = true;
+      setSending(true);
+    });
+  } catch (err) {
+    if (err.name !== "AbortError") append("error", `Network error: ${err.message}`);
+  } finally {
+    currentController = null;
+    streamPhase = null;
+    if (activated) {
+      state.sending = false;
+      setSending(false);
+      if (openAsks.size > 0) {
+        openAsks.clear();
+        applyPromptState();
+      }
+      await refreshSidebar();
+    }
+  }
+}
+
 async function send() {
   if (state.sending) {
     // Don't abort the fetch — that severs the SSE stream and we lose the
@@ -739,7 +872,7 @@ async function send() {
   setSending(true);
 
   try {
-    let res = await apiFetch("/api/chat", {
+    const res = await apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ conversation_id: state.current.id, prompt }),
@@ -752,48 +885,7 @@ async function send() {
       return;
     }
 
-    // Reconnect loop: read SSE until we see a terminal `end` event, or
-    // a non-recoverable error. If the read errors or gets aborted-for-
-    // reconnect, reattach via /api/chat/:id/stream?since=lastSeq.
-    let endSeen = false;
-    while (!endSeen) {
-      streamPhase = "streaming";
-      try {
-        await streamSse(res, {
-          onMessage: (sdkMsg, meta) => {
-            if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
-            renderSdkMessage(sdkMsg, renderCtx);
-          },
-          onError: (err) => {
-            if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
-            else append("error", err.payload?.message ?? JSON.stringify(err.payload));
-          },
-          onEnd: () => { endSeen = true; },
-        });
-      } catch (err) {
-        if (err.name === "AbortError" && !reconnectRequested) {
-          streamPhase = null;
-          throw err;
-        }
-      }
-      streamPhase = null;
-      if (endSeen) break;
-      reconnectRequested = false;
-      currentController = new AbortController();
-      try {
-        res = await apiFetch(
-          `/api/chat/${encodeURIComponent(state.current.id)}/stream?since=${lastSeq | 0}`,
-          { signal: currentController.signal },
-        );
-        if (!res.ok) {
-          append("error", `Reconnect failed: HTTP ${res.status}`);
-          break;
-        }
-      } catch (err) {
-        if (err.name !== "AbortError") append("error", `Reconnect failed: ${err.message}`);
-        break;
-      }
-    }
+    await runStreamLoop(res);
   } catch (err) {
     if (err.name !== "AbortError") append("error", `Network error: ${err.message}`);
     else append("system", "(cancelled)");

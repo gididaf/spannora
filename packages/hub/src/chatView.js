@@ -104,7 +104,7 @@ export function initChatView(handlers) {
   // throw "signal is aborted without reason".
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
-    if (!sending || !currentController) return;
+    if (!currentController) return;
     if (streamPhase !== "streaming") return;
     reconnectRequested = true;
     try { currentController.abort(); } catch { /* already aborted */ }
@@ -169,6 +169,9 @@ export function startNewChat() {
     alert("A response is still streaming. Cancel it first or wait.");
     return;
   }
+  if (currentController) {
+    try { currentController.abort(); } catch { /* already aborted */ }
+  }
   currentConversation = null;
   // pendingCwd persists — typically last-used cwd from main's per-instance memory
   clearTranscript();
@@ -181,13 +184,21 @@ export async function openConversation(client, convId) {
     alert("A response is still streaming. Cancel it first or wait.");
     return;
   }
+  // A previous attemptResume may have a probe controller in flight
+  // (sending=false during the probe, so the check above didn't catch it).
+  // Abort it so its lingering frames don't render into the new transcript.
+  if (currentController) {
+    try { currentController.abort(); } catch { /* already aborted */ }
+  }
   setActiveClient(client);
+  let messages;
   try {
     const data = await client.getConversation(convId);
     currentConversation = data.conversation;
     pendingCwd = null;
     clearTranscript();
-    hydrateMessages(data.messages || []);
+    messages = data.messages || [];
+    hydrateMessages(messages);
     renderCwd();
   } catch (err) {
     if (err instanceof InstanceUnauthorizedError) {
@@ -195,7 +206,13 @@ export async function openConversation(client, convId) {
       return;
     }
     appendError(`Failed to open conversation: ${err.message}`);
+    return;
   }
+  // If the SDK turn is still running server-side, attach to its live
+  // stream and resume rendering past whatever's already in DB. If the
+  // turn already ended, the server returns an immediate `event: end`
+  // and this is a no-op — no UI flicker.
+  await attemptResume(messages);
 }
 
 export async function abortCurrentSend() {
@@ -282,6 +299,127 @@ function append(cls, text) {
 
 function appendError(message) { append("error", message); }
 
+// Pump an initial SSE Response through render until `event: end`, with
+// automatic reattach on dropped reads (visibilitychange-triggered or
+// otherwise). Mutates module state: lastSeq, currentController,
+// streamPhase, reconnectRequested. Caller owns the sending/UI flags.
+//
+// `onFirstFrame`, if provided, is invoked at most once when the first
+// real message frame arrives. attemptResume() uses this to defer
+// flipping the UI to "streaming" until we know there's actually a live
+// turn (vs. the server's immediate `event: end` when no broker exists).
+async function runStreamLoop(initialRes, onFirstFrame) {
+  let res = initialRes;
+  let endSeen = false;
+  let firstFrameFired = false;
+  const fireFirst = () => {
+    if (firstFrameFired) return;
+    firstFrameFired = true;
+    onFirstFrame?.();
+  };
+  while (!endSeen) {
+    streamPhase = "streaming";
+    try {
+      await streamSse(res, {
+        onMessage: (sdkMsg, meta) => {
+          fireFirst();
+          if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
+          renderSdkMessage(sdkMsg, renderCtx);
+        },
+        onError: (err) => {
+          if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
+          else appendError(err.payload?.message ?? JSON.stringify(err.payload));
+        },
+        onEnd: () => { endSeen = true; },
+      });
+    } catch (err) {
+      // A genuine user-cancel (abortCurrentSend) propagates; a
+      // visibility-triggered reconnect falls through to the reattach
+      // below. Treat any other read error as a candidate for reconnect
+      // as well — the broker might still be alive.
+      if (err.name === "AbortError" && !reconnectRequested) {
+        streamPhase = null;
+        throw err;
+      }
+    }
+    streamPhase = null;
+    if (endSeen) break;
+    reconnectRequested = false;
+    currentController = new AbortController();
+    try {
+      res = await activeClient.streamReattach(
+        currentConversation.id,
+        lastSeq,
+        currentController.signal,
+      );
+      if (!res.ok) {
+        appendError(`Reconnect failed: HTTP ${res.status}`);
+        break;
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") appendError(`Reconnect failed: ${err.message}`);
+      break;
+    }
+  }
+  return firstFrameFired;
+}
+
+// Called from openConversation after hydrate. If the conversation's
+// turn is still active server-side, attach and stream remaining frames;
+// if not, the server's immediate `event: end` ends the loop with no UI
+// side-effects (we only flip the UI to "streaming" once a real frame
+// arrives — `onFirstFrame` in runStreamLoop).
+async function attemptResume(messages) {
+  let cursor = 0;
+  for (const m of messages) {
+    if (typeof m.seq === "number" && m.seq > cursor) cursor = m.seq;
+  }
+  if (!cursor || !activeClient || !currentConversation) return;
+
+  lastSeq = cursor;
+  reconnectRequested = false;
+  currentController = new AbortController();
+  const convAtStart = currentConversation;
+
+  let res;
+  try {
+    res = await activeClient.streamReattach(
+      currentConversation.id,
+      lastSeq,
+      currentController.signal,
+    );
+    if (!res.ok) { currentController = null; return; }
+  } catch (err) {
+    currentController = null;
+    if (err instanceof InstanceUnauthorizedError) callbacks.onUnauthorized?.(activeClient);
+    // Other errors stay silent: a cold-reopen resume probe shouldn't
+    // surface a red error if the network is flaky — the hydrated DB
+    // snapshot is still useful on its own.
+    return;
+  }
+
+  let activated = false;
+  try {
+    await runStreamLoop(res, () => {
+      // Bail out if the user switched conversations mid-probe.
+      if (currentConversation !== convAtStart) return;
+      activated = true;
+      setSending(true);
+    });
+  } catch (err) {
+    if (err instanceof InstanceUnauthorizedError) callbacks.onUnauthorized?.(activeClient);
+    else if (err.name !== "AbortError") appendError(`Network error: ${err.message}`);
+  } finally {
+    currentController = null;
+    streamPhase = null;
+    if (activated) {
+      setSending(false);
+      if (openAsks.size > 0) { openAsks.clear(); applyPromptState(); }
+      await callbacks.onChatFinished?.();
+    }
+  }
+}
+
 async function send() {
   if (!activeClient) return;
   if (sending) {
@@ -326,7 +464,7 @@ async function send() {
   setSending(true);
 
   try {
-    let res = await activeClient.startChat(
+    const res = await activeClient.startChat(
       { conversation_id: currentConversation.id, prompt },
       currentController.signal,
     );
@@ -335,54 +473,7 @@ async function send() {
       appendError(`HTTP ${res.status}: ${errBody.error || "request failed"}`);
       return;
     }
-    // Reconnect loop: stay in here as long as the turn hasn't seen a
-    // terminal `end` event. Each iteration reads the current SSE stream
-    // to exhaustion; if it errors or gets aborted-for-reconnect, we
-    // reattach via streamReattach and resume rendering past lastSeq.
-    let endSeen = false;
-    while (!endSeen) {
-      streamPhase = "streaming";
-      try {
-        await streamSse(res, {
-          onMessage: (sdkMsg, meta) => {
-            if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
-            renderSdkMessage(sdkMsg, renderCtx);
-          },
-          onError: (err) => {
-            if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
-            else appendError(err.payload?.message ?? JSON.stringify(err.payload));
-          },
-          onEnd: () => { endSeen = true; },
-        });
-      } catch (err) {
-        // A genuine user-cancel (abortCurrentSend) propagates; a
-        // visibility-triggered reconnect falls through to the reattach
-        // below. Treat any other read error as a candidate for
-        // reconnect as well — the broker might still be alive.
-        if (err.name === "AbortError" && !reconnectRequested) {
-          streamPhase = null;
-          throw err;
-        }
-      }
-      streamPhase = null;
-      if (endSeen) break;
-      reconnectRequested = false;
-      currentController = new AbortController();
-      try {
-        res = await activeClient.streamReattach(
-          currentConversation.id,
-          lastSeq,
-          currentController.signal,
-        );
-        if (!res.ok) {
-          appendError(`Reconnect failed: HTTP ${res.status}`);
-          break;
-        }
-      } catch (err) {
-        if (err.name !== "AbortError") appendError(`Reconnect failed: ${err.message}`);
-        break;
-      }
-    }
+    await runStreamLoop(res);
   } catch (err) {
     if (err instanceof InstanceUnauthorizedError) {
       callbacks.onUnauthorized?.(activeClient);
