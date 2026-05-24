@@ -23,6 +23,14 @@ export interface Message {
   role: string;
   content_json: string;
   created_at: number;
+  /**
+   * Monotonic per-row sequence number (SQLite's implicit `rowid`). Strictly
+   * increasing across all messages in all conversations. Used as the SSE
+   * cursor for live-stream reattach: a client that disconnects mid-turn can
+   * reconnect with `?since=<lastSeq>` and the server replays anything
+   * emitted in the meantime.
+   */
+  seq: number;
 }
 
 export interface User {
@@ -217,28 +225,36 @@ export function insertMessage(params: {
   role: string;
   content_json: string;
 }): Message {
-  const msg: Message = {
-    id: randomUUID(),
-    conversation_id: params.conversation_id,
-    role: params.role,
-    content_json: params.content_json,
-    created_at: Date.now(),
-  };
-  openDb()
+  const id = randomUUID();
+  const created_at = Date.now();
+  const result = openDb()
     .prepare(
       `INSERT INTO messages (id, conversation_id, role, content_json, created_at)
        VALUES (@id, @conversation_id, @role, @content_json, @created_at)`,
     )
-    .run(msg);
-  return msg;
+    .run({
+      id,
+      conversation_id: params.conversation_id,
+      role: params.role,
+      content_json: params.content_json,
+      created_at,
+    });
+  return {
+    id,
+    conversation_id: params.conversation_id,
+    role: params.role,
+    content_json: params.content_json,
+    created_at,
+    seq: Number(result.lastInsertRowid),
+  };
 }
 
 export function getMessages(conversation_id: string): Message[] {
   return openDb()
     .prepare(
-      `SELECT id, conversation_id, role, content_json, created_at
+      `SELECT rowid AS seq, id, conversation_id, role, content_json, created_at
        FROM messages WHERE conversation_id = ?
-       ORDER BY created_at ASC, id ASC`,
+       ORDER BY rowid ASC`,
     )
     .all(conversation_id) as Message[];
 }

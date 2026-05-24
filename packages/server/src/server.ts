@@ -51,20 +51,147 @@ const STATIC_TYPES: Record<string, string> = {
 
 type PendingResolver = (answer: AskUserAnswer) => void;
 
-interface ActiveEntry {
+interface BufferedEvent {
+  /** Monotonic SQLite rowid from the persisted message row. */
+  seq: number;
+  /** SSE event name: "message" or "error". `end` is not buffered (terminal). */
+  event: "message" | "error";
+  /** JSON-serializable payload. */
+  data: unknown;
+}
+
+interface Subscriber {
+  res: http.ServerResponse;
+  /** Last seq written to this subscriber's response stream. */
+  lastSeq: number;
+  /** Set to true when this subscriber's underlying socket closed. */
+  closed: boolean;
+}
+
+/**
+ * Per-conversation broker. Holds the SDK query handle, the pending
+ * AskUserQuestion resolvers, an in-memory replay buffer of every SSE
+ * event emitted during the turn, and a Set of currently-attached
+ * subscribers. The broker outlives any one HTTP request — when a mobile
+ * client backgrounds and drops its SSE connection, the broker keeps the
+ * SDK query alive and persists messages to DB; the client reconnects via
+ * GET /api/chat/:id/stream?since=N and the broker replays from the buffer.
+ *
+ * Lifecycle: created on POST /api/chat (first subscriber attaches as part
+ * of the same request). Removed from `activeQueries` synchronously when
+ * the SDK ends or is explicitly cancelled — there's a small grace window
+ * (5s) between SDK end and broker removal so a reattacher that just missed
+ * the last frame can still replay it.
+ */
+interface Broker {
   handle: ChatHandle;
-  // AskUserQuestion calls awaiting a browser POST, keyed by tool_use_id.
   pending: Map<string, PendingResolver>;
+  buffer: BufferedEvent[];
+  subscribers: Set<Subscriber>;
+  /** True once onEnd fired. After this, no new buffered events arrive. */
+  ended: boolean;
+  /** Cleared in cleanupBroker(); kept here so we can stop the heartbeat. */
+  heartbeat: NodeJS.Timeout;
 }
 
 // One in-flight query per conversation. Keyed by conversation_id.
-const activeQueries = new Map<string, ActiveEntry>();
+const activeQueries = new Map<string, Broker>();
 
-function drainPending(entry: ActiveEntry, message: string): void {
-  for (const resolve of entry.pending.values()) {
+/**
+ * SSE keepalive frame. Sent every 15s on every subscriber so:
+ *  - mobile-network NATs don't reap the TCP connection
+ *  - reverse proxies (nginx, Caddy) keep the stream open
+ *  - the client can detect a silently-dead stream (no data in >30s)
+ */
+const HEARTBEAT_MS = 15_000;
+/** Time between SDK end and broker removal, so late reattachers still replay. */
+const POST_END_GRACE_MS = 5_000;
+
+function drainPending(broker: Broker, message: string): void {
+  for (const resolve of broker.pending.values()) {
     resolve({ denied: true, message });
   }
-  entry.pending.clear();
+  broker.pending.clear();
+}
+
+function writeSseRaw(res: http.ServerResponse, frame: string): boolean {
+  if (res.writableEnded || res.destroyed) return false;
+  try {
+    res.write(frame);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function emitToSubscriber(sub: Subscriber, ev: BufferedEvent): void {
+  if (sub.closed) return;
+  const ok = writeSseRaw(
+    sub.res,
+    `id: ${ev.seq}\nevent: ${ev.event}\ndata: ${JSON.stringify(ev.data)}\n\n`,
+  );
+  if (!ok) {
+    sub.closed = true;
+    return;
+  }
+  sub.lastSeq = ev.seq;
+}
+
+function publishToBroker(broker: Broker, ev: BufferedEvent): void {
+  broker.buffer.push(ev);
+  for (const sub of broker.subscribers) emitToSubscriber(sub, ev);
+}
+
+function attachSubscriber(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  broker: Broker,
+  since: number,
+): Subscriber {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write(": stream-open\n\n");
+
+  const sub: Subscriber = { res, lastSeq: since, closed: false };
+  // Replay anything the broker has already emitted past the client's cursor.
+  for (const ev of broker.buffer) {
+    if (ev.seq > since) emitToSubscriber(sub, ev);
+  }
+  if (broker.ended) {
+    // Caught up to the end and the turn already finished — close out.
+    writeSseRaw(res, `event: end\ndata: {}\n\n`);
+    res.end();
+    sub.closed = true;
+    return sub;
+  }
+  broker.subscribers.add(sub);
+  const onClose = () => {
+    sub.closed = true;
+    broker.subscribers.delete(sub);
+  };
+  req.on("close", onClose);
+  req.on("aborted", onClose);
+  return sub;
+}
+
+function cleanupBroker(conversationId: string, broker: Broker): void {
+  clearInterval(broker.heartbeat);
+  // Close any still-attached subscribers.
+  for (const sub of broker.subscribers) {
+    if (!sub.closed) {
+      writeSseRaw(sub.res, `event: end\ndata: {}\n\n`);
+      try { sub.res.end(); } catch { /* socket already gone */ }
+      sub.closed = true;
+    }
+  }
+  broker.subscribers.clear();
+  if (activeQueries.get(conversationId) === broker) {
+    activeQueries.delete(conversationId);
+  }
 }
 
 function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, urlPath: string): void {
@@ -98,11 +225,6 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
   return JSON.parse(raw);
-}
-
-function writeSseEvent(res: http.ServerResponse, event: string, data: unknown): void {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -212,9 +334,16 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
         return;
       }
 
-      if (activeQueries.has(conversation_id)) {
+      const existing = activeQueries.get(conversation_id);
+      if (existing && !existing.ended) {
         sendJson(res, 409, { error: "conversation already has an active query" });
         return;
+      }
+      if (existing) {
+        // The previous broker finished but is still in its post-end grace
+        // window (held for late reattachers). The user wants to send a
+        // new turn now, so collapse the grace window immediately.
+        cleanupBroker(conversation_id, existing);
       }
 
       // Persist the user's prompt before launching the query so a crash
@@ -232,17 +361,25 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
       }
       touchConversation(conversation_id);
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-      res.write(": stream-open\n\n");
-
       const pending = new Map<string, PendingResolver>();
+      const broker: Broker = {
+        // Filled in below; declared first so onMessage can reference it.
+        handle: undefined as unknown as ChatHandle,
+        pending,
+        buffer: [],
+        subscribers: new Set(),
+        ended: false,
+        heartbeat: setInterval(() => {
+          for (const sub of broker.subscribers) {
+            if (!writeSseRaw(sub.res, ": hb\n\n")) {
+              sub.closed = true;
+              broker.subscribers.delete(sub);
+            }
+          }
+        }, HEARTBEAT_MS),
+      };
 
-      const handle = startChat(
+      broker.handle = startChat(
         {
           prompt,
           cwd: conv.cwd,
@@ -257,13 +394,16 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
         },
         {
           onMessage: (msg) => {
-            // Persist every SDK message in order.
+            // Persist every SDK message in order. The DB-assigned rowid is
+            // the seq used as the SSE id, so reattachers can replay by seq.
+            let seq = 0;
             try {
-              insertMessage({
+              const row = insertMessage({
                 conversation_id,
                 role: "sdk",
                 content_json: JSON.stringify(msg),
               });
+              seq = row.seq;
             } catch (err) {
               log.error("failed to persist SDK message", { conversation_id, err });
             }
@@ -285,33 +425,46 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
               conv.last_context_tokens = usage.tokens;
               conv.last_context_window = usage.window;
             }
-            writeSseEvent(res, "message", msg);
+            publishToBroker(broker, { seq, event: "message", data: msg });
           },
-          onError: (err) =>
-            writeSseEvent(res, "error", {
-              message: err instanceof Error ? err.message : String(err),
-            }),
+          onError: (err) => {
+            // Error events get the next seq slot so they're ordered properly
+            // in the replay buffer. They're NOT persisted to DB.
+            const seq = (broker.buffer.at(-1)?.seq ?? 0) + 1;
+            publishToBroker(broker, {
+              seq,
+              event: "error",
+              data: { message: err instanceof Error ? err.message : String(err) },
+            });
+          },
           onEnd: () => {
-            const entry = activeQueries.get(conversation_id);
-            if (entry) drainPending(entry, "Stream ended.");
-            activeQueries.delete(conversation_id);
+            broker.ended = true;
+            drainPending(broker, "Stream ended.");
             touchConversation(conversation_id);
-            writeSseEvent(res, "end", {});
-            res.end();
+            // Fan a terminal `end` event to every currently-attached
+            // subscriber so they stop reading.
+            for (const sub of broker.subscribers) {
+              if (sub.closed) continue;
+              writeSseRaw(sub.res, `event: end\ndata: {}\n\n`);
+              try { sub.res.end(); } catch { /* socket gone */ }
+              sub.closed = true;
+            }
+            broker.subscribers.clear();
+            // Hold the buffer briefly so a reconnecting client whose
+            // last fetch died milliseconds before the end can still see
+            // the final state via the reattach endpoint.
+            setTimeout(() => cleanupBroker(conversation_id, broker), POST_END_GRACE_MS);
           },
         },
       );
 
-      activeQueries.set(conversation_id, { handle, pending });
+      activeQueries.set(conversation_id, broker);
 
-      const cancelOnClose = () => {
-        const entry = activeQueries.get(conversation_id);
-        if (entry) drainPending(entry, "Stream closed.");
-        handle.cancel();
-        activeQueries.delete(conversation_id);
-      };
-      req.on("close", cancelOnClose);
-      req.on("aborted", cancelOnClose);
+      // Attach this request's response as the first subscriber, starting
+      // from seq=0 (the buffer is still empty so no replay). When this
+      // socket closes (e.g. mobile background → TCP drop), we ONLY
+      // unsubscribe — the SDK query keeps running.
+      attachSubscriber(req, res, broker, 0);
     })
     .catch((err) => {
       sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
@@ -320,18 +473,58 @@ function handleChat(req: http.IncomingMessage, res: http.ServerResponse): void {
 
 // Cancel the in-flight query for a conversation. Returns 200 if a query
 // was actively cancelled, 204 if there was nothing in flight. Either way,
-// the client can stop waiting.
+// the client can stop waiting. The SDK's onEnd handler does the broker
+// teardown so we don't double-clean here.
 function handleStopChat(res: http.ServerResponse, conversationId: string): void {
-  const active = activeQueries.get(conversationId);
-  if (!active) {
+  const broker = activeQueries.get(conversationId);
+  if (!broker) {
     sendJson(res, 204, { ok: true, was_active: false });
     return;
   }
-  drainPending(active, "User stopped the turn.");
-  active.handle.cancel();
-  activeQueries.delete(conversationId);
+  drainPending(broker, "User stopped the turn.");
+  broker.handle.cancel();
   log.info("chat stopped via DELETE", { conversation_id: conversationId });
   sendJson(res, 200, { ok: true, was_active: true });
+}
+
+/**
+ * Reattach to an in-flight (or just-finished) turn. The client passes
+ * `?since=<seq>` — the highest seq it has already rendered. The broker
+ * replays any buffered messages past that cursor, then keeps the SSE
+ * stream open for live messages until the turn ends.
+ *
+ * If no broker exists for the conversation (turn finished long ago or
+ * never started), we write a single `end` event and close. That lets
+ * the client treat "reattach" as idempotent — it always gets either
+ * live frames, replay, or an immediate end.
+ */
+function handleStreamReattach(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  conversationId: string,
+  since: number,
+): void {
+  const conv = getConversation(conversationId);
+  if (!conv) {
+    sendJson(res, 404, { error: "conversation not found" });
+    return;
+  }
+  const broker = activeQueries.get(conversationId);
+  if (!broker) {
+    // No in-flight turn — write a synthetic open + end so the client's
+    // stream reader closes cleanly without throwing.
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write(": stream-open\n\n");
+    res.write(`event: end\ndata: {}\n\n`);
+    res.end();
+    return;
+  }
+  attachSubscriber(req, res, broker, since);
 }
 
 // Resolve an AskUserQuestion that the SDK is currently paused on. Body:
@@ -356,9 +549,9 @@ function handleAnswerChat(
         sendJson(res, 400, { error: "answers object is required" });
         return;
       }
-      const entry = activeQueries.get(conversationId);
-      const resolver = entry?.pending.get(tool_use_id);
-      if (!entry || !resolver) {
+      const broker = activeQueries.get(conversationId);
+      const resolver = broker?.pending.get(tool_use_id);
+      if (!broker || !resolver) {
         sendJson(res, 404, { error: "no pending question for that tool_use_id" });
         return;
       }
@@ -433,11 +626,12 @@ function handleDeleteConversation(res: http.ServerResponse, id: string): void {
     return;
   }
   // Cancel any in-flight query for this conversation before deleting.
-  const active = activeQueries.get(id);
-  if (active) {
-    drainPending(active, "Conversation deleted.");
-    active.handle.cancel();
-    activeQueries.delete(id);
+  // SDK onEnd → broker cleanup will fire shortly; we don't drop the
+  // broker from activeQueries here so subscribers get the `end` event.
+  const broker = activeQueries.get(id);
+  if (broker) {
+    drainPending(broker, "Conversation deleted.");
+    broker.handle.cancel();
   }
   deleteConversation(id);
   sendJson(res, 200, { ok: true });
@@ -610,6 +804,7 @@ const CONV_PATH_RE = /^\/api\/conversations(?:\/([^/]+))?$/;
 const SESSION_REVOKE_RE = /^\/api\/auth\/sessions\/([^/]+)$/;
 const CHAT_STOP_RE = /^\/api\/chat\/([^/]+)\/current$/;
 const CHAT_ANSWER_RE = /^\/api\/chat\/([^/]+)\/answer$/;
+const CHAT_STREAM_RE = /^\/api\/chat\/([^/]+)\/stream$/;
 
 function isPublicPath(method: string | undefined, p: string): boolean {
   if (method === "GET" && (p === "/login" || p === "/setup")) return true;
@@ -685,6 +880,11 @@ const server = http.createServer((req, res) => {
   if (stopMatch && req.method === "DELETE") return handleStopChat(res, stopMatch[1]);
   const answerMatch = CHAT_ANSWER_RE.exec(url.pathname);
   if (answerMatch && req.method === "POST") return handleAnswerChat(req, res, answerMatch[1]);
+  const streamMatch = CHAT_STREAM_RE.exec(url.pathname);
+  if (streamMatch && req.method === "GET") {
+    const since = Number(url.searchParams.get("since") ?? 0) || 0;
+    return handleStreamReattach(req, res, streamMatch[1], since);
+  }
   if (req.method === "GET" && url.pathname === "/api/fs/list") return handleFsList(req, res, url);
   if (req.method === "POST" && url.pathname === "/api/fs/mkdir") return handleFsMkdir(req, res);
 

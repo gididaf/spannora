@@ -30,7 +30,21 @@ let activeClient = null;
 let currentConversation = null; // {id, cwd, ...}
 let pendingCwd = null;
 let sending = false;
+// Controls the SSE fetch in the current send() iteration. Cycled on every
+// reconnect: when the page returns to visible after a mobile background,
+// we abort this controller to break out of the (likely-dead) read loop
+// and immediately attach a fresh streamReattach.
 let currentController = null;
+// Tracks the highest SSE message seq seen in the current turn. Used as
+// the `since` cursor when we reconnect after a mobile background — the
+// server-side broker replays anything emitted past that seq from its
+// in-memory buffer.
+let lastSeq = 0;
+// True iff the current AbortController was tripped on purpose to force
+// a reconnect (vs. a user-initiated cancel via abortCurrentSend). The
+// stream loop in send() distinguishes the two: reconnect → silently
+// reattach; user cancel → propagate AbortError to caller.
+let reconnectRequested = false;
 
 let callbacks = {
   onPickCwd: null,         // () => void  (opens picker)
@@ -73,6 +87,18 @@ export function initChatView(handlers) {
       e.preventDefault();
       send().catch(() => {});
     }
+  });
+  // Mobile background → resume often leaves the SSE TCP socket in a
+  // half-dead state where reads silently hang for minutes before the
+  // OS times out. As soon as we're back to visible, proactively break
+  // the current fetch so the send() loop reattaches via the broker's
+  // replay endpoint. Note: this fires for *every* visible transition,
+  // including momentary ones, but reattach is cheap and idempotent.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (!sending || !currentController) return;
+    reconnectRequested = true;
+    try { currentController.abort(); } catch { /* already aborted */ }
   });
   applyPromptState();
 }
@@ -285,11 +311,13 @@ async function send() {
   append("user", prompt);
   promptInput.value = "";
 
+  lastSeq = 0;
+  reconnectRequested = false;
   currentController = new AbortController();
   setSending(true);
 
   try {
-    const res = await activeClient.startChat(
+    let res = await activeClient.startChat(
       { conversation_id: currentConversation.id, prompt },
       currentController.signal,
     );
@@ -298,13 +326,49 @@ async function send() {
       appendError(`HTTP ${res.status}: ${errBody.error || "request failed"}`);
       return;
     }
-    await streamSse(res, {
-      onMessage: (sdkMsg) => renderSdkMessage(sdkMsg, renderCtx),
-      onError: (err) => {
-        if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
-        else appendError(err.payload?.message ?? JSON.stringify(err.payload));
-      },
-    });
+    // Reconnect loop: stay in here as long as the turn hasn't seen a
+    // terminal `end` event. Each iteration reads the current SSE stream
+    // to exhaustion; if it errors or gets aborted-for-reconnect, we
+    // reattach via streamReattach and resume rendering past lastSeq.
+    let endSeen = false;
+    while (!endSeen) {
+      try {
+        await streamSse(res, {
+          onMessage: (sdkMsg, meta) => {
+            if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
+            renderSdkMessage(sdkMsg, renderCtx);
+          },
+          onError: (err) => {
+            if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
+            else appendError(err.payload?.message ?? JSON.stringify(err.payload));
+          },
+          onEnd: () => { endSeen = true; },
+        });
+      } catch (err) {
+        // A genuine user-cancel (abortCurrentSend) propagates; a
+        // visibility-triggered reconnect falls through to the reattach
+        // below. Treat any other read error as a candidate for
+        // reconnect as well — the broker might still be alive.
+        if (err.name === "AbortError" && !reconnectRequested) throw err;
+      }
+      if (endSeen) break;
+      reconnectRequested = false;
+      currentController = new AbortController();
+      try {
+        res = await activeClient.streamReattach(
+          currentConversation.id,
+          lastSeq,
+          currentController.signal,
+        );
+        if (!res.ok) {
+          appendError(`Reconnect failed: HTTP ${res.status}`);
+          break;
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") appendError(`Reconnect failed: ${err.message}`);
+        break;
+      }
+    }
   } catch (err) {
     if (err instanceof InstanceUnauthorizedError) {
       callbacks.onUnauthorized?.(activeClient);

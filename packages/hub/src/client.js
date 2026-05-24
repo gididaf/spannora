@@ -94,6 +94,18 @@ export class SpannoraClient {
       signal,
     });
   }
+  // Reattach to an in-flight (or just-finished) turn. The server replays
+  // any messages with seq > since from its in-memory broker buffer, then
+  // keeps the SSE stream open for live frames until the turn ends. If no
+  // broker exists for the conversation, the server still returns a 200
+  // SSE response that immediately writes an `event: end` and closes — so
+  // the caller can treat reattach as idempotent.
+  async streamReattach(conversationId, since, signal) {
+    return this._fetch(
+      `/api/chat/${encodeURIComponent(conversationId)}/stream?since=${since | 0}`,
+      { method: "GET", signal },
+    );
+  }
   stopChat(conversationId) {
     return this._fetch(`/api/chat/${encodeURIComponent(conversationId)}/current`, { method: "DELETE" });
   }

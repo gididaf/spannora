@@ -72,6 +72,14 @@ function getLastCwd() { return localStorage.getItem(LAST_CWD_KEY) || null; }
 function saveLastCwd(p) { try { localStorage.setItem(LAST_CWD_KEY, p); } catch {} }
 
 let currentController = null;
+// Highest SSE seq seen in the current turn — used as the `since` cursor
+// on reconnect after a mobile background drops the SSE stream. See
+// handleStreamReattach in src/server.ts and the loop in send() below.
+let lastSeq = 0;
+// True iff the current controller was aborted to force a reconnect (vs.
+// a real user cancel). Lets the send-loop distinguish silently-reattach
+// from propagate-AbortError.
+let reconnectRequested = false;
 const toolCards = new Map();
 // tool_use_ids of AskUserQuestion cards whose form is still open
 // (not yet answered, denied, or aborted). While non-empty, the main
@@ -202,6 +210,16 @@ function bindEvents() {
       e.preventDefault();
       send();
     }
+  });
+  // Mobile background → resume frequently leaves the SSE socket in a
+  // half-dead state where reads silently hang. As soon as we're back
+  // to visible, abort the current fetch so the send() loop reattaches
+  // via /api/chat/:id/stream and resumes rendering from lastSeq.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (!state.sending || !currentController) return;
+    reconnectRequested = true;
+    try { currentController.abort(); } catch { /* already aborted */ }
   });
 }
 
@@ -704,12 +722,14 @@ async function send() {
   append("user", prompt);
   promptInput.value = "";
 
+  lastSeq = 0;
+  reconnectRequested = false;
   currentController = new AbortController();
   state.sending = true;
   setSending(true);
 
   try {
-    const res = await apiFetch("/api/chat", {
+    let res = await apiFetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ conversation_id: state.current.id, prompt }),
@@ -722,13 +742,43 @@ async function send() {
       return;
     }
 
-    await streamSse(res, {
-      onMessage: (sdkMsg) => renderSdkMessage(sdkMsg, renderCtx),
-      onError: (err) => {
-        if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
-        else append("error", err.payload?.message ?? JSON.stringify(err.payload));
-      },
-    });
+    // Reconnect loop: read SSE until we see a terminal `end` event, or
+    // a non-recoverable error. If the read errors or gets aborted-for-
+    // reconnect, reattach via /api/chat/:id/stream?since=lastSeq.
+    let endSeen = false;
+    while (!endSeen) {
+      try {
+        await streamSse(res, {
+          onMessage: (sdkMsg, meta) => {
+            if (typeof meta?.id === "number") lastSeq = Math.max(lastSeq, meta.id);
+            renderSdkMessage(sdkMsg, renderCtx);
+          },
+          onError: (err) => {
+            if (err.kind === "parse") append("system", `(unparseable: ${err.raw})`);
+            else append("error", err.payload?.message ?? JSON.stringify(err.payload));
+          },
+          onEnd: () => { endSeen = true; },
+        });
+      } catch (err) {
+        if (err.name === "AbortError" && !reconnectRequested) throw err;
+      }
+      if (endSeen) break;
+      reconnectRequested = false;
+      currentController = new AbortController();
+      try {
+        res = await apiFetch(
+          `/api/chat/${encodeURIComponent(state.current.id)}/stream?since=${lastSeq | 0}`,
+          { signal: currentController.signal },
+        );
+        if (!res.ok) {
+          append("error", `Reconnect failed: HTTP ${res.status}`);
+          break;
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") append("error", `Reconnect failed: ${err.message}`);
+        break;
+      }
+    }
   } catch (err) {
     if (err.name !== "AbortError") append("error", `Network error: ${err.message}`);
     else append("system", "(cancelled)");

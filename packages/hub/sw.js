@@ -10,7 +10,7 @@
 // per-server spannora PWAs installed from individual spannora origins
 // without collision.
 
-const VERSION = "v4";
+const VERSION = "v5";
 const CACHE = `spannora-hub-${VERSION}`;
 
 // All paths are relative to the SW's scope, so this works whether the

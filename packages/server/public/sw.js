@@ -11,7 +11,7 @@
 // /shared/*.js modules — old caches need to be evicted so the cache-first
 // path doesn't serve a stale non-module app.js.
 
-const VERSION = "v4";
+const VERSION = "v5";
 const CACHE = `spannora-${VERSION}`;
 
 // We don't precache auth-gated assets anymore: if the SW installs while
