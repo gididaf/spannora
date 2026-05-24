@@ -275,6 +275,24 @@ fi
 say "Installing production dependencies (this may take a minute)"
 (cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --silent) \
   || die "npm install failed. If better-sqlite3 fails to build, install build tools: $PM install -y build-essential python3"
+
+# Force-rebuild native deps against the current Node ABI. Necessary because
+# `npm install` is a no-op when the lockfile is already satisfied (e.g. on
+# upgrade re-runs) and so it doesn't rematerialize prebuilt binaries even
+# when Node has changed under it. Without this, a host whose Node version
+# shifted between installs (Node 23 → Node 20 was the v0.6.0 regression)
+# ends up with a NODE_MODULE_VERSION mismatch and the service crashloops on
+# `openDb()` with ERR_DLOPEN_FAILED.
+say "Rebuilding native modules for $(node --version)"
+(cd "$INSTALL_DIR" && npm rebuild better-sqlite3 --no-audit --no-fund --silent) \
+  || die "npm rebuild better-sqlite3 failed. Install build tools: $PM install -y build-essential python3"
+
+# Fail fast at install time instead of letting systemd discover the ABI
+# mismatch via crashloop. Loads the native module under the same node
+# binary the service will use.
+if ! node -e "require('better-sqlite3')" 2>/dev/null; then
+  die "better-sqlite3 still won't load under $(node --version). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
+fi
 ok "Dependencies installed"
 
 # --- Resolve runtime paths for the templated unit ---
