@@ -3,6 +3,42 @@ layout: ../../layouts/DocsLayout.astro
 title: "Install spannora — Claude Code web UI on your VM"
 description: "Install the spannora self-hosted Claude Code web UI on a Linux VM in one command. Covers the one-line installer, custom domains, reverse proxies, and manual deploy."
 breadcrumb: "Install"
+datePublished: "2026-05-19"
+dateModified: "2026-05-19"
+jsonLd:
+  "@context": "https://schema.org"
+  "@type": "HowTo"
+  name: "Install spannora on a Linux VM"
+  description: "Install the spannora self-hosted Claude Code web UI on a fresh Linux VM in about five minutes. Includes HTTPS via Let's Encrypt, a systemd service, password authentication, and a browser-reachable chat UI."
+  totalTime: "PT5M"
+  estimatedCost:
+    "@type": "MonetaryAmount"
+    currency: "USD"
+    value: "0"
+  supply:
+    - "@type": "HowToSupply"
+      name: "Linux VM with root SSH access (Ubuntu, Debian, Rocky, or Alma)"
+    - "@type": "HowToSupply"
+      name: "Public IP with ports 80 and 443 reachable"
+    - "@type": "HowToSupply"
+      name: "Anthropic account with Claude Code access or API credit"
+  step:
+    - "@type": "HowToStep"
+      name: "Run the one-line installer on your VM"
+      text: "SSH into the VM as root and run: curl -fsSL https://spannora.dev/install.sh | bash. The installer downloads the latest release, installs runtime dependencies, sets up a systemd service and SQLite database, detects nginx or installs Caddy, and provisions HTTPS via Let's Encrypt."
+      url: "https://spannora.dev/docs/install/#one-line-install"
+    - "@type": "HowToStep"
+      name: "Copy the setup token from the installer output"
+      text: "When the installer finishes, it prints a one-time setup token in a banner. Copy that token to your clipboard."
+      url: "https://spannora.dev/docs/install/#one-line-install"
+    - "@type": "HowToStep"
+      name: "Open spannora and create your account"
+      text: "Visit https://<your-vm-ip>.sslip.io/setup (or your custom domain), paste the setup token, then choose a username and password to create the single user account."
+      url: "https://spannora.dev/docs/install/#one-line-install"
+    - "@type": "HowToStep"
+      name: "Authenticate Claude Code"
+      text: "Run sudo node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js and follow the /login flow once. spannora then resumes Claude Code sessions normally on every chat."
+      url: "https://spannora.dev/docs/install/#after-install"
 ---
 
 # Install spannora on a Linux VM
@@ -64,9 +100,9 @@ If you're setting `SPANNORA_DOMAIN`, point an A record at your VM first — Let'
 | `SPANNORA_NO_PROXY=1` | Skip reverse-proxy setup entirely. You handle TLS yourself. |
 | `SPANNORA_NO_HTTPS=1` | nginx path only — skip certbot. |
 | `SPANNORA_ACME_EMAIL` | Email registered with Let's Encrypt. |
-| `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin [hub](/docs/hub/) access). Re-run unset to clear. |
+| `SPANNORA_ALLOWED_ORIGINS` | Comma-separated origins permitted to talk to this install (needed for cross-origin [hub](/docs/hub/) access). Set to write/update; pass an explicit empty value (`SPANNORA_ALLOWED_ORIGINS=`) to clear; **leave unset to preserve** whatever's already configured. |
 
-The installer is idempotent: re-running with `SPANNORA_ALLOWED_ORIGINS` set writes a systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf`; re-running with it unset removes that drop-in. The main systemd unit is rewritten on every install, so the drop-in is how CORS config survives upgrades.
+The installer is idempotent. The CORS allowlist lives in a systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf` (the main unit is rewritten on every install, so the drop-in is how the allowlist survives upgrades). The three-way contract on `SPANNORA_ALLOWED_ORIGINS` exists so a routine upgrade re-run with no env vars doesn't silently disable cross-origin access — only an explicit empty value (`SPANNORA_ALLOWED_ORIGINS=` in your command) wipes the drop-in.
 
 ## Reverse-proxy detection
 

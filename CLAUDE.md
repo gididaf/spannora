@@ -171,6 +171,13 @@ SPANNORA_ALLOWED_ORIGINS=https://spannora.dev,http://localhost:5173
 
 If a cross-origin client gets a CORS error, the failure mode is always: response has no `Access-Control-Allow-Origin`. The diagnostic is `curl -i -X OPTIONS <url> -H 'Origin: <hub origin>'` — a 204 with headers means the server is set up correctly; anything else means `SPANNORA_ALLOWED_ORIGINS` doesn't include the hub origin (or isn't set on that process — env changes only take effect at process restart).
 
+**Installer contract on `SPANNORA_ALLOWED_ORIGINS` (since v0.6.2):** three-way, not two-way.
+- **set, non-empty** → write/update the systemd drop-in at `/etc/systemd/system/spannora.service.d/origins.conf`.
+- **set, empty** (`SPANNORA_ALLOWED_ORIGINS=` in your install command) → explicit clear; drop-in is removed.
+- **unset** → preserve whatever's already on disk; routine upgrade re-runs without env vars do **not** silently disable the allowlist.
+
+Pre-v0.6.2 installs treated unset and empty the same (both cleared). That was hostile on upgrade — running the installer to pick up a new tarball would wipe the CORS config unless you remembered to re-set the env var. The new contract makes "clear" intentional.
+
 ## Hub PWA
 
 A static SPA at `https://spannora.dev/app/` (or any self-hosted copy). Anyone can use the public hub or self-host their own — the hub has no backend state.

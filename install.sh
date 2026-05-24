@@ -14,7 +14,12 @@
 #                             (default: anonymous registration, no expiry notices)
 #   SPANNORA_ALLOWED_ORIGINS  Comma-separated origins permitted to talk
 #                             cross-origin (needed for the hub PWA at
-#                             spannora.dev/app/). Re-run unset to clear.
+#                             spannora.dev/app/). Set to write/update the
+#                             drop-in; pass an explicit empty value
+#                             (SPANNORA_ALLOWED_ORIGINS=) to clear it;
+#                             leave unset to preserve whatever is already
+#                             configured (so routine upgrade re-runs don't
+#                             silently disable the allowlist).
 
 set -euo pipefail
 
@@ -363,8 +368,17 @@ if command -v systemd-run >/dev/null 2>&1; then
 fi
 
 # Optional CORS allowlist via a drop-in. The drop-in lives outside the
-# main unit so future installer runs don't clobber it; the env var is
-# the source of truth — re-run with it unset to clear the allowlist.
+# main unit so future installer runs don't clobber it.
+#
+# Three-way contract on SPANNORA_ALLOWED_ORIGINS:
+#   - set, non-empty   → write/update the drop-in to this value
+#   - set, empty       → explicit clear (delete the drop-in)
+#   - unset            → preserve whatever's already on disk
+#
+# The unset=preserve branch exists so a routine upgrade re-run (no env
+# vars passed) doesn't silently disable cross-origin access to the hub.
+# `${VAR+x}` is the standard bash idiom for "is VAR set at all,
+# regardless of value" — see ABS guide on parameter expansion.
 DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
 ORIGINS_DROPIN="${DROPIN_DIR}/origins.conf"
 if [[ -n "${SPANNORA_ALLOWED_ORIGINS:-}" ]]; then
@@ -374,10 +388,16 @@ if [[ -n "${SPANNORA_ALLOWED_ORIGINS:-}" ]]; then
 [Service]
 Environment=SPANNORA_ALLOWED_ORIGINS=${SPANNORA_ALLOWED_ORIGINS}
 EOF
+elif [[ -n "${SPANNORA_ALLOWED_ORIGINS+x}" ]]; then
+  # Set but empty — caller is explicitly clearing.
+  if [[ -f "$ORIGINS_DROPIN" ]]; then
+    say "Clearing previous CORS allowlist drop-in (SPANNORA_ALLOWED_ORIGINS= was empty)"
+    rm -f "$ORIGINS_DROPIN"
+    rmdir "$DROPIN_DIR" 2>/dev/null || true
+  fi
 elif [[ -f "$ORIGINS_DROPIN" ]]; then
-  say "Clearing previous CORS allowlist drop-in"
-  rm -f "$ORIGINS_DROPIN"
-  rmdir "$DROPIN_DIR" 2>/dev/null || true
+  # Unset entirely — leave the existing drop-in alone.
+  ok "Preserving existing CORS allowlist drop-in (set SPANNORA_ALLOWED_ORIGINS= to clear)"
 fi
 
 systemctl daemon-reload
