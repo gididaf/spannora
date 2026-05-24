@@ -88,12 +88,25 @@ export function errorPane(content) {
   return pre;
 }
 
-// Append a node to a transcript, removing the empty-state placeholder if
-// present, and auto-scrolling to the bottom.
+// Within this many px of the bottom counts as "at the bottom" for the
+// sticky-scroll heuristic. Wide enough to absorb sub-pixel rounding and
+// the input footer's safe-area padding without trapping users who are
+// reading recent (but not last) messages.
+const STICK_TO_BOTTOM_PX = 64;
+
+export function isNearBottom(el) {
+  return el.scrollHeight - el.clientHeight - el.scrollTop <= STICK_TO_BOTTOM_PX;
+}
+
+// Append a node to a transcript, removing the empty-state placeholder
+// if present. Only auto-scrolls if the user was already pinned near the
+// bottom — otherwise streaming SDK frames would yank a reader who had
+// scrolled up to revisit earlier turns.
 export function appendToTranscript(transcript, node) {
   const empty = transcript.querySelector(".empty-state");
   if (empty) empty.remove();
+  const stick = isNearBottom(transcript);
   transcript.appendChild(node);
-  transcript.scrollTop = transcript.scrollHeight;
+  if (stick) transcript.scrollTop = transcript.scrollHeight;
   return node;
 }

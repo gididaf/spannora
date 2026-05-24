@@ -14,6 +14,7 @@ import {
   streamSse,
   renderSdkMessage,
   escapeHtml,
+  isNearBottom,
 } from "../shared/index.js";
 import { InstanceUnauthorizedError } from "./client.js";
 
@@ -289,11 +290,12 @@ function setSending(s) {
 function append(cls, text) {
   const empty = transcript.querySelector(".empty-state");
   if (empty) empty.remove();
+  const stick = isNearBottom(transcript);
   const el = document.createElement("div");
   el.className = `msg ${cls}`;
   el.textContent = text;
   transcript.appendChild(el);
-  transcript.scrollTop = transcript.scrollHeight;
+  if (stick) transcript.scrollTop = transcript.scrollHeight;
   return el;
 }
 

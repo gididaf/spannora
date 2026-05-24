@@ -9,6 +9,7 @@ import {
   renderSdkMessage,
   escapeHtml,
   makeTextBubble,
+  isNearBottom,
 } from "/shared/index.js";
 
 // Android Chrome PWA standalone + viewport-fit=cover renders the WebView
@@ -664,11 +665,12 @@ function append(cls, text) {
   // Remove empty-state if present
   const empty = transcript.querySelector(".empty-state");
   if (empty) empty.remove();
+  const stick = isNearBottom(transcript);
   const el = document.createElement("div");
   el.className = `msg ${cls}`;
   el.textContent = text;
   transcript.appendChild(el);
-  transcript.scrollTop = transcript.scrollHeight;
+  if (stick) transcript.scrollTop = transcript.scrollHeight;
   return el;
 }
 

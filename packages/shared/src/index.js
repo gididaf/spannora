@@ -14,6 +14,7 @@ export {
   resultList,
   errorPane,
   appendToTranscript,
+  isNearBottom,
 } from "./dom.js";
 
 export { loadHljs, langForPath, highlightInto, EXT_LANG } from "./highlight.js";
