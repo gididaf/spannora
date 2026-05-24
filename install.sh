@@ -308,7 +308,12 @@ say "Rebuilding native modules for $("$NODE_BIN" --version)"
 # mismatch via crashloop. Loads the native module under the exact binary
 # the systemd unit's ExecStart will invoke — same NODE_BIN, no daylight
 # between this check and what the service sees at runtime.
-if ! "$NODE_BIN" -e "require('better-sqlite3')" 2>/dev/null; then
+# `cd "$INSTALL_DIR"` is mandatory: Node's CommonJS require() walks
+# node_modules upward from cwd, so the bare `node -e require('…')`
+# version was searching from the installer's cwd (typically /tmp or
+# $HOME) and never finding the module that npm installed at
+# /opt/spannora/node_modules.
+if ! (cd "$INSTALL_DIR" && "$NODE_BIN" -e "require('better-sqlite3')") 2>/dev/null; then
   die "better-sqlite3 still won't load under $NODE_BIN ($("$NODE_BIN" --version)). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
 fi
 ok "Dependencies installed"
