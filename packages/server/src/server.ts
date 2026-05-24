@@ -157,10 +157,18 @@ function attachSubscriber(
   res.write(": stream-open\n\n");
 
   const sub: Subscriber = { res, lastSeq: since, closed: false };
+  let replayed = 0;
   // Replay anything the broker has already emitted past the client's cursor.
   for (const ev of broker.buffer) {
-    if (ev.seq > since) emitToSubscriber(sub, ev);
+    if (ev.seq > since) { emitToSubscriber(sub, ev); replayed++; }
   }
+  log.info("sse subscriber attached", {
+    since,
+    replayed,
+    buffered: broker.buffer.length,
+    subscribers_after: broker.subscribers.size + 1,
+    ended: broker.ended,
+  });
   if (broker.ended) {
     // Caught up to the end and the turn already finished — close out.
     writeSseRaw(res, `event: end\ndata: {}\n\n`);
@@ -170,8 +178,14 @@ function attachSubscriber(
   }
   broker.subscribers.add(sub);
   const onClose = () => {
+    if (sub.closed) return;
     sub.closed = true;
     broker.subscribers.delete(sub);
+    log.info("sse subscriber dropped", {
+      last_seq: sub.lastSeq,
+      subscribers_after: broker.subscribers.size,
+      ended: broker.ended,
+    });
   };
   req.on("close", onClose);
   req.on("aborted", onClose);
@@ -883,6 +897,7 @@ const server = http.createServer((req, res) => {
   const streamMatch = CHAT_STREAM_RE.exec(url.pathname);
   if (streamMatch && req.method === "GET") {
     const since = Number(url.searchParams.get("since") ?? 0) || 0;
+    log.info("stream reattach request", { conversation_id: streamMatch[1], since });
     return handleStreamReattach(req, res, streamMatch[1], since);
   }
   if (req.method === "GET" && url.pathname === "/api/fs/list") return handleFsList(req, res, url);

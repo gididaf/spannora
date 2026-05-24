@@ -80,6 +80,11 @@ let lastSeq = 0;
 // a real user cancel). Lets the send-loop distinguish silently-reattach
 // from propagate-AbortError.
 let reconnectRequested = false;
+// "streaming" only while we're actively awaiting reader.read() on the SSE
+// body. visibilitychange only aborts during this phase — so a late/duplicate
+// visibility event during the reattach fetch can't abort the fresh
+// controller (which would trip "signal is aborted without reason").
+let streamPhase = null;
 const toolCards = new Map();
 // tool_use_ids of AskUserQuestion cards whose form is still open
 // (not yet answered, denied, or aborted). While non-empty, the main
@@ -213,11 +218,16 @@ function bindEvents() {
   });
   // Mobile background → resume frequently leaves the SSE socket in a
   // half-dead state where reads silently hang. As soon as we're back
-  // to visible, abort the current fetch so the send() loop reattaches
-  // via /api/chat/:id/stream and resumes rendering from lastSeq.
+  // to visible, abort the current SSE read so send() reattaches via
+  // /api/chat/:id/stream and resumes rendering from lastSeq. We ONLY
+  // abort when streamPhase === "streaming": mobile browsers can fire
+  // visibilitychange more than once on a foreground transition, and a
+  // late event during the reattach fetch would otherwise abort the fresh
+  // controller (fetch then throws "signal is aborted without reason").
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     if (!state.sending || !currentController) return;
+    if (streamPhase !== "streaming") return;
     reconnectRequested = true;
     try { currentController.abort(); } catch { /* already aborted */ }
   });
@@ -747,6 +757,7 @@ async function send() {
     // reconnect, reattach via /api/chat/:id/stream?since=lastSeq.
     let endSeen = false;
     while (!endSeen) {
+      streamPhase = "streaming";
       try {
         await streamSse(res, {
           onMessage: (sdkMsg, meta) => {
@@ -760,8 +771,12 @@ async function send() {
           onEnd: () => { endSeen = true; },
         });
       } catch (err) {
-        if (err.name === "AbortError" && !reconnectRequested) throw err;
+        if (err.name === "AbortError" && !reconnectRequested) {
+          streamPhase = null;
+          throw err;
+        }
       }
+      streamPhase = null;
       if (endSeen) break;
       reconnectRequested = false;
       currentController = new AbortController();
@@ -784,6 +799,7 @@ async function send() {
     else append("system", "(cancelled)");
   } finally {
     currentController = null;
+    streamPhase = null;
     state.sending = false;
     setSending(false);
     // Stream is done. If a question was open (e.g. turn aborted before

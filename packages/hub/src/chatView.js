@@ -45,6 +45,11 @@ let lastSeq = 0;
 // stream loop in send() distinguishes the two: reconnect → silently
 // reattach; user cancel → propagate AbortError to caller.
 let reconnectRequested = false;
+// "streaming" only while we're actively awaiting reader.read() on the SSE
+// body. The visibilitychange handler only aborts during this phase — so a
+// late/duplicate visibility event during the reattach fetch can't abort the
+// fresh controller and trigger "signal is aborted without reason".
+let streamPhase = null; // "streaming" | null
 
 let callbacks = {
   onPickCwd: null,         // () => void  (opens picker)
@@ -91,12 +96,16 @@ export function initChatView(handlers) {
   // Mobile background → resume often leaves the SSE TCP socket in a
   // half-dead state where reads silently hang for minutes before the
   // OS times out. As soon as we're back to visible, proactively break
-  // the current fetch so the send() loop reattaches via the broker's
-  // replay endpoint. Note: this fires for *every* visible transition,
-  // including momentary ones, but reattach is cheap and idempotent.
+  // the current SSE read so the send() loop reattaches via the broker's
+  // replay endpoint. We ONLY abort when streamPhase === "streaming" —
+  // mobile browsers can fire `visibilitychange` multiple times during a
+  // foreground transition; if we aborted blindly we'd kill the fresh
+  // controller we just minted for the reattach fetch, causing fetch to
+  // throw "signal is aborted without reason".
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     if (!sending || !currentController) return;
+    if (streamPhase !== "streaming") return;
     reconnectRequested = true;
     try { currentController.abort(); } catch { /* already aborted */ }
   });
@@ -332,6 +341,7 @@ async function send() {
     // reattach via streamReattach and resume rendering past lastSeq.
     let endSeen = false;
     while (!endSeen) {
+      streamPhase = "streaming";
       try {
         await streamSse(res, {
           onMessage: (sdkMsg, meta) => {
@@ -349,8 +359,12 @@ async function send() {
         // visibility-triggered reconnect falls through to the reattach
         // below. Treat any other read error as a candidate for
         // reconnect as well — the broker might still be alive.
-        if (err.name === "AbortError" && !reconnectRequested) throw err;
+        if (err.name === "AbortError" && !reconnectRequested) {
+          streamPhase = null;
+          throw err;
+        }
       }
+      streamPhase = null;
       if (endSeen) break;
       reconnectRequested = false;
       currentController = new AbortController();
@@ -379,6 +393,7 @@ async function send() {
     }
   } finally {
     currentController = null;
+    streamPhase = null;
     setSending(false);
     if (openAsks.size > 0) {
       openAsks.clear();
