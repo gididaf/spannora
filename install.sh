@@ -104,7 +104,9 @@ configure_caddy() {
   cat > "$CADDY_CONF" <<EOF
 ${domain} {
     reverse_proxy 127.0.0.1:7878 {
-        transport http { read_timeout 1h }
+        transport http {
+            read_timeout 1h
+        }
     }
 }
 EOF
