@@ -323,28 +323,32 @@ say "Installing production dependencies (this may take a minute)"
 (cd "$INSTALL_DIR" && PATH="$NODE_DIR:$PATH" npm install --omit=dev --no-audit --no-fund --silent) \
   || die "npm install failed. If better-sqlite3 fails to build, install build tools: $PM install -y build-essential python3"
 
-# Force-rebuild native deps against the current Node ABI. Necessary because
-# `npm install` is a no-op when the lockfile is already satisfied (e.g. on
-# upgrade re-runs) and so it doesn't rematerialize prebuilt binaries even
-# when Node has changed under it. Without this, a host whose Node version
-# shifted between installs (Node 22 → Node 20 was the v0.6.0 regression)
-# ends up with a NODE_MODULE_VERSION mismatch and the service crashloops on
-# `openDb()` with ERR_DLOPEN_FAILED.
-say "Rebuilding native modules for $("$NODE_BIN" --version)"
-(cd "$INSTALL_DIR" && PATH="$NODE_DIR:$PATH" npm rebuild better-sqlite3 --no-audit --no-fund --silent) \
-  || die "npm rebuild better-sqlite3 failed. Install build tools: $PM install -y build-essential python3"
-
-# Fail fast at install time instead of letting systemd discover the ABI
-# mismatch via crashloop. Loads the native module under the exact binary
+# Smoke-test that the native module loads under the exact node binary
 # the systemd unit's ExecStart will invoke — same NODE_BIN, no daylight
-# between this check and what the service sees at runtime.
+# between this check and what the service sees at runtime. Fail fast at
+# install time instead of letting systemd discover an ABI mismatch via
+# crashloop.
+#
+# On fresh installs the just-built artifact loads immediately and we
+# skip the rebuild entirely — this is the slowest step of a fresh
+# install (better-sqlite3 compiles the SQLite amalgamation), so
+# skipping it shaves a few minutes. On upgrade re-runs where Node
+# changed (Node 22 → Node 20 was the v0.6.0 regression), `npm install`
+# is a no-op because the lockfile is already satisfied, so the cached
+# .node binary stays stale — require() fails with ERR_DLOPEN_FAILED
+# and we self-heal via npm rebuild.
+#
 # `cd "$INSTALL_DIR"` is mandatory: Node's CommonJS require() walks
 # node_modules upward from cwd, so the bare `node -e require('…')`
-# version was searching from the installer's cwd (typically /tmp or
-# $HOME) and never finding the module that npm installed at
+# version would search from the installer's cwd (typically /tmp or
+# $HOME) and never find the module npm installed at
 # /opt/spannora/node_modules.
 if ! (cd "$INSTALL_DIR" && "$NODE_BIN" -e "require('better-sqlite3')") 2>/dev/null; then
-  die "better-sqlite3 still won't load under $NODE_BIN ($("$NODE_BIN" --version)). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
+  say "Rebuilding native modules for $("$NODE_BIN" --version) (ABI mismatch)"
+  (cd "$INSTALL_DIR" && PATH="$NODE_DIR:$PATH" npm rebuild better-sqlite3 --no-audit --no-fund --silent) \
+    || die "npm rebuild better-sqlite3 failed. Install build tools: $PM install -y build-essential python3"
+  (cd "$INSTALL_DIR" && "$NODE_BIN" -e "require('better-sqlite3')") 2>/dev/null \
+    || die "better-sqlite3 still won't load under $NODE_BIN ($("$NODE_BIN" --version)). Try: cd $INSTALL_DIR && rm -rf node_modules && npm install --omit=dev"
 fi
 ok "Dependencies installed"
 
