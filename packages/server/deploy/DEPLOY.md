@@ -23,16 +23,29 @@ sudo tar -xzf spannora-<version>.tar.gz -C /opt/spannora --strip-components=1
 sudo chown -R root:root /opt/spannora
 ```
 
-## 2. Install production dependencies
+## 2. Install build tools (for the `better-sqlite3` native compile)
+
+`better-sqlite3` ships C++ source that compiles via `node-gyp` on first install. Fresh Ubuntu / Debian images don't include the toolchain — skip this step if `cc`, `make`, and `python3` are all on `PATH`.
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y build-essential python3
+
+# RHEL / Fedora
+sudo dnf groupinstall -y "Development Tools"
+sudo dnf install -y python3
+```
+
+## 3. Install production dependencies
 
 ```bash
 cd /opt/spannora
 sudo npm install --omit=dev
 ```
 
-Installs `@anthropic-ai/claude-agent-sdk`, `better-sqlite3` (native — needs `build-essential` on Debian/Ubuntu if no prebuilt binary), and `bcryptjs`.
+Installs `@anthropic-ai/claude-agent-sdk`, `better-sqlite3` (the native module — compiled from source against the toolchain from step 2), and `bcryptjs`.
 
-## 3. Make sure Claude Code is authenticated for root
+## 4. Make sure Claude Code is authenticated for root
 
 ```bash
 ls /root/.claude/ 2>/dev/null && echo "auth present" || echo "need to /login"
@@ -47,7 +60,7 @@ sudo node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
 
 The SDK ships its own bundled CLI at that path — no separate Claude Code install needed.
 
-## 4. Install the systemd unit
+## 5. Install the systemd unit
 
 The shipped unit is a template (`spannora.service.in`) with two placeholders that have to be substituted at install time:
 
@@ -77,7 +90,7 @@ sudo journalctl -u spannora -n 50
 
 On first start the log prints a **one-time setup token** in a box. Copy it.
 
-## 5. Reverse proxy
+## 6. Reverse proxy
 
 ### Easy path: Caddy + sslip.io
 
@@ -98,7 +111,9 @@ sudo mkdir -p /etc/caddy/conf.d
 sudo tee /etc/caddy/conf.d/spannora.caddy >/dev/null <<EOF
 ${PUBLIC_IP}.sslip.io {
     reverse_proxy 127.0.0.1:7878 {
-        transport http { read_timeout 1h }
+        transport http {
+            read_timeout 1h
+        }
     }
 }
 EOF
@@ -129,11 +144,11 @@ location / {
 }
 ```
 
-## 6. Complete setup in the browser
+## 7. Complete setup in the browser
 
-Visit `https://<your-domain-or-sslip>` → /setup → paste the token from step 4 → pick a username/password. You're in.
+Visit `https://<your-domain-or-sslip>` → /setup → paste the token from step 5 → pick a username/password. You're in.
 
-## 7. Allow the hub PWA (optional)
+## 8. Allow the hub PWA (optional)
 
 The standalone hub PWA at `https://spannora.dev/app/` (or any self-hosted copy) is a different origin from this spannora instance, so the browser blocks its requests unless you opt in. Add the hub's origin to `SPANNORA_ALLOWED_ORIGINS`:
 
