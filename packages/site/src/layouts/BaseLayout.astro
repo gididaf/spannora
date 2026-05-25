@@ -16,7 +16,7 @@ const SITE_URL = "https://spannora.dev";
 const {
   title,
   description,
-  ogImage = "/og-image.svg",
+  ogImage = "/og-image.png",
   ogType = "website",
   noindex = false,
   jsonLd,
@@ -48,6 +48,8 @@ const allLd: Record<string, unknown>[] = [organizationLd, ...extra];
     {noindex && <meta name="robots" content="noindex,nofollow" />}
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180x180.png" />
     <meta name="theme-color" content="#0f1115" />
     <meta name="color-scheme" content="dark" />
 
@@ -270,6 +272,21 @@ const allLd: Record<string, unknown>[] = [organizationLd, ...extra];
         text-align: left;
       }
       .prose th { background: var(--surface); font-weight: 600; }
+      .prose figure {
+        margin: 1.75rem 0;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1rem;
+      }
+      .prose figure img { margin: 0 auto; }
+      .prose figcaption {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-top: 0.75rem;
+        text-align: center;
+        line-height: 1.45;
+      }
 
       .skip-link {
         position: fixed;

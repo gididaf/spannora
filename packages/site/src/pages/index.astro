@@ -121,6 +121,24 @@ const webSiteLd = {
     </div>
   </Hero>
 
+  <section class="tight">
+    <div class="container">
+      <figure class="product-shot">
+        <img
+          src="/img/hero.png"
+          alt="Two self-hosted spannora instances running side by side in the spannora hub. The left panel shows the desktop chat view with an AskUserQuestion tool card — single-select and multi-select questions about hobbies. The right panel shows the mobile-viewport view streaming Bash, Grep, Glob and Task tool calls while Claude searches a codebase for TODOs."
+          width="1600"
+          height="774"
+          loading="eager"
+          fetchpriority="high"
+        />
+        <figcaption>
+          Two self-hosted spannora instances, both managed from the optional <a href="/app/">hub</a>. Same chat UI you get on every spannora install — desktop and mobile-viewport browser side by side.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section>
     <div class="container">
       <h2>Why a web UI for Claude Code?</h2>
@@ -169,3 +187,29 @@ const webSiteLd = {
     </div>
   </section>
 </BaseLayout>
+
+<style>
+  .product-shot {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  }
+  .product-shot img {
+    border-radius: 6px;
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .product-shot figcaption {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin: 0.85rem 0.5rem 0.25rem;
+    line-height: 1.5;
+  }
+  .product-shot figcaption a { color: var(--text-muted); text-decoration: underline; }
+  .product-shot figcaption a:hover { color: var(--text); }
+</style>

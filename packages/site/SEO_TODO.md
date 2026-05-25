@@ -16,22 +16,22 @@ like *"self-hosted Claude Code web UI"* in weeks, **not** broad *"Claude Code"*
 
 These are pure-code, no-design-needed.
 
-- [ ] **Convert OG image to PNG.** `public/og-image.svg` doesn't render reliably
+- [x] **Convert OG image to PNG.** `public/og-image.svg` doesn't render reliably
       on Twitter/X, Facebook, LinkedIn, Discord, Slack. Export the SVG to
       `public/og-image.png` at exactly **1200×630**, keep the SVG too, then
       change `BaseLayout.astro:19` default to `/og-image.png`.
       *Single biggest fix — affects every link share from now on.*
 
-- [ ] **Noindex the hub.** `/app/` is currently indexable; Google will index
+- [x] **Noindex the hub.** `/app/` is currently indexable; Google will index
       the PWA shell and dilute topical focus.
       - Add `<meta name="robots" content="noindex">` to `packages/hub/index.html`
       - Add `Disallow: /app/` to `packages/site/public/robots.txt`
 
-- [ ] **Block raw `install.sh` from indexing.** Currently allowed; Google may
+- [x] **Block raw `install.sh` from indexing.** Currently allowed; Google may
       index the raw bash file.
       - Add `Disallow: /install.sh` to `packages/site/public/robots.txt`
 
-- [ ] **Add a `404.astro` page.** Astro falls back to a default. A branded 404
+- [x] **Add a `404.astro` page.** Astro falls back to a default. A branded 404
       with internal links to `/`, `/docs/`, `/docs/install/` keeps crawl budget
       from leaking on broken inbound links.
 
@@ -39,17 +39,17 @@ These are pure-code, no-design-needed.
 
 ## High-impact follow-ups (week 1)
 
-- [ ] **HowTo schema on `/docs/install/`.** Triggers rich-result snippets for
+- [x] **HowTo schema on `/docs/install/`.** Triggers rich-result snippets for
       *"how to install …"* queries. Big win for install-intent traffic.
       Needs a small `DocsLayout.astro` tweak to accept extra JSON-LD via
       frontmatter, then add the `HowTo` block to `install.mdx` frontmatter.
 
-- [ ] **`datePublished` + `dateModified` on docs.** Google uses freshness
+- [x] **`datePublished` + `dateModified` on docs.** Google uses freshness
       signals. Add to `DocsLayout.astro` — either extend `BreadcrumbList` or
       emit a separate `Article` JSON-LD block. Source the dates from
       frontmatter so each MDX file owns its own values.
 
-- [ ] **Favicon raster variants.** Only `favicon.svg` exists today. Some SERP
+- [x] **Favicon raster variants.** Only `favicon.svg` exists today. Some SERP
       renderers and iOS want raster.
       - `public/favicon-32x32.png`
       - `public/apple-touch-icon-180x180.png`
@@ -61,12 +61,16 @@ These are pure-code, no-design-needed.
 
 All-text pages look thin in 2026. Ordered by ROI:
 
-- [ ] **OG image PNG** (covered above — listed here too because it's a visual).
+- [x] **OG image PNG** (covered above — listed here too because it's a visual).
 
-- [ ] **Hero screenshot.** Composite desktop + mobile showing Claude
+- [x] **Hero screenshot.** Composite desktop + mobile showing Claude
       mid-streaming with a Bash tool card visible. Place in the
       `<slot name="visual">` on `index.astro` Hero (currently just an
       InstallBlock — keep the InstallBlock, add the screenshot beside/below).
+      *Done — `public/img/hero.png` (1600×774, 325 KB). Placed as a full-width
+      figure section directly under the Hero (desktop + mobile-viewport
+      browsers in a single hub-managed composite, with caption naming the
+      hub).*
 
 - [ ] **Install demo video/GIF.** ~15s silent screencap: paste curl command →
       setup token banner → login → first chat. Target ≤3 MB if GIF, or MP4 in
@@ -77,9 +81,11 @@ All-text pages look thin in 2026. Ordered by ROI:
 - [ ] **Hub screenshot.** Left rail with 3 colored instance chips + active
       chat. On `/docs/hub/` near "When you'd use the hub".
 
-- [ ] **Architecture diagram.** browser/PWA → spannora server → Claude Agent
+- [x] **Architecture diagram.** browser/PWA → spannora server → Claude Agent
       SDK → Anthropic API. SVG is fine here (it's content, not OG).
       Place on `/docs/security/` near "The threat model" or on `/docs/` home.
+      *Done — SVG at `public/img/architecture.svg`, embedded on `/docs/security/`
+      under "The threat model" via `<figure>` with descriptive alt text.*
 
 - [ ] **Mobile "Add to Home Screen" screenshots.** iOS + Android side by side.
       On `/docs/hub/` "Mobile install" section.

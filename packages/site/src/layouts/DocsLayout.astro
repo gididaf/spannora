@@ -5,6 +5,9 @@ interface Frontmatter {
   title: string;
   description: string;
   breadcrumb?: string;
+  datePublished?: string;
+  dateModified?: string;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
 }
 
 interface Props {
@@ -13,6 +16,7 @@ interface Props {
 
 const { frontmatter } = Astro.props;
 const SITE_URL = "https://spannora.dev";
+const canonical = new URL(Astro.url.pathname, SITE_URL).href;
 
 const breadcrumbItems: Record<string, unknown>[] = [
   { "@type": "ListItem", position: 1, name: "Home", item: SITE_URL + "/" },
@@ -23,7 +27,7 @@ if (frontmatter.breadcrumb) {
     "@type": "ListItem",
     position: 3,
     name: frontmatter.breadcrumb,
-    item: new URL(Astro.url.pathname, SITE_URL).href,
+    item: canonical,
   });
 }
 
@@ -32,12 +36,34 @@ const breadcrumbLd = {
   "@type": "BreadcrumbList",
   itemListElement: breadcrumbItems,
 };
+
+const ldBlocks: Record<string, unknown>[] = [breadcrumbLd];
+
+if (frontmatter.datePublished) {
+  ldBlocks.push({
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    headline: frontmatter.title,
+    description: frontmatter.description,
+    mainEntityOfPage: canonical,
+    url: canonical,
+    datePublished: frontmatter.datePublished,
+    dateModified: frontmatter.dateModified ?? frontmatter.datePublished,
+    author: { "@type": "Organization", name: "spannora", url: SITE_URL },
+    publisher: { "@type": "Organization", name: "spannora", url: SITE_URL },
+  });
+}
+
+if (frontmatter.jsonLd) {
+  const extras = Array.isArray(frontmatter.jsonLd) ? frontmatter.jsonLd : [frontmatter.jsonLd];
+  for (const block of extras) ldBlocks.push(block);
+}
 ---
 
 <BaseLayout
   title={frontmatter.title}
   description={frontmatter.description}
-  jsonLd={breadcrumbLd}
+  jsonLd={ldBlocks}
 >
   <article class="container prose docs-article">
     <nav aria-label="Breadcrumb" class="breadcrumb">

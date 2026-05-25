@@ -1,4 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /app/
+Disallow: /install.sh
 
 Sitemap: https://spannora.dev/sitemap-index.xml

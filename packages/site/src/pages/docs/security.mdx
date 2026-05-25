@@ -3,6 +3,8 @@ layout: ../../layouts/DocsLayout.astro
 title: "Security model — self-hosted Claude Code web UI"
 description: "How spannora handles authentication, why the server runs as root, the threat model for self-hosted Claude Code, and what to lock down before exposing it to the internet."
 breadcrumb: "Security"
+datePublished: "2026-05-19"
+dateModified: "2026-05-19"
 ---
 
 # Security model
@@ -14,6 +16,17 @@ spannora is a web app that gives Claude root access to your VM. That's the featu
 A spannora instance is functionally a remote root shell with an LLM in front. If an attacker authenticates to the web UI, they can ask Claude to read any file on the VM, exfiltrate credentials, modify systemd units, or run arbitrary commands.
 
 The defense is the auth gate. Treat it accordingly.
+
+<figure>
+  <img
+    src="/img/architecture.svg"
+    alt="spannora architecture: a browser or installed PWA on the left talks over HTTPS and an SSE stream to the spannora server on your Linux VM in the middle, which embeds the Claude Agent SDK and connects out to the Anthropic API on the right. The browser never talks to Anthropic directly."
+    loading="lazy"
+    width="880"
+    height="320"
+  />
+  <figcaption>How a request flows: your browser talks to spannora over HTTPS; spannora calls the Anthropic API via the embedded Agent SDK. The browser never sees your Claude credentials.</figcaption>
+</figure>
 
 ## Authentication
 
