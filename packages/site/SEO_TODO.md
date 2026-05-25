@@ -77,6 +77,30 @@ All-text pages look thin in 2026. Ordered by ROI:
       `public/`. Embed on `/docs/install/` before "Customizing the install".
       If MP4, **add `VideoObject` JSON-LD** — this surfaces in Google's video
       carousel for install-intent queries. Single biggest organic lever.
+      *In progress — install half recorded at `~/Desktop/demo.mov` (terminal +
+      browser landing on `/setup`). Outstanding before recording the second
+      take:*
+      1. *On the VM, authenticate Claude Code once so first-chat actually
+         streams: `node /opt/spannora/node_modules/@anthropic-ai/claude-agent-sdk/cli.js`
+         → `/login` → URL → sign in → `/exit`. Auth persists at `/root/.claude/`,
+         no service restart needed.*
+      2. *Second take: `/setup` page → paste token → create account → first
+         chat (suggest a visual prompt like "list files in /opt" so a Bash
+         tool card appears in the recording).*
+      3. *Token continuity gotcha: token rotates on every spannora service
+         restart, so the token shown in the install footage must match the
+         one pasted in the second take, OR blur the token in both shots
+         during edit. Blur is the safer default.*
+      4. *Concat clips, speed up the install-compile stretch 10–20× in the
+         editor, save as `packages/site/public/install-demo.mp4`.*
+      5. *Add `VideoObject` JSON-LD to `install.mdx` via the same
+         frontmatter `jsonLd` mechanism `HowTo` uses (DocsLayout already
+         forwards it to BaseLayout).*
+
+      *Note on install duration for a from-scratch recording: this session
+      shipped two installer fixes — Caddy multi-line syntax + skip the
+      redundant `npm rebuild` on fresh installs. Fresh-VM install is now
+      ~5–7 min (was ~8–10 min). Still needs editor speedup for a 15s clip.*
 
 - [ ] **Hub screenshot.** Left rail with 3 colored instance chips + active
       chat. On `/docs/hub/` near "When you'd use the hub".
