@@ -233,6 +233,29 @@ else
   ok "Node $(node --version) already present"
 fi
 
+# --- Build tools (better-sqlite3 compiles native bindings via node-gyp) ---
+# Fresh Ubuntu / Debian images don't ship with gcc/make/python3; without
+# them, the npm install below blows up on better-sqlite3's build step.
+# Cheap to check, idempotent, keeps the "one curl command" promise true
+# on a fresh VM.
+if ! { command -v cc >/dev/null && command -v make >/dev/null && command -v python3 >/dev/null; }; then
+  say "Installing build tools for native modules"
+  case "$PM" in
+    apt)
+      apt-get install -y build-essential python3 >/dev/null
+      ;;
+    dnf|yum)
+      "$PM" groupinstall -y "Development Tools" >/dev/null
+      "$PM" install -y python3 >/dev/null
+      ;;
+    *)
+      warn "Unknown package manager — couldn't auto-install build tools."
+      warn "If npm install fails, install gcc/make/python3 manually."
+      ;;
+  esac
+  ok "Build tools installed"
+fi
+
 # --- Resolve the node binary the service (and this script) will use ---
 # Pinned up front so npm install, npm rebuild, the require() smoke test,
 # and the templated systemd unit all reference the *same* node binary.

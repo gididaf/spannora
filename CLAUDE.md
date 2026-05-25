@@ -105,6 +105,24 @@ The installer fetches `/releases/latest` so whatever tag you create becomes the 
 
 GitHub Pages source for the repo must be set to "GitHub Actions" (Settings → Pages → Build and deployment → Source) once, before the first deploy works. The custom domain (`spannora.dev`) is set in Settings → Pages → Custom domain; the artifact also writes a `CNAME` file via `packages/site/public/CNAME` as belt-and-suspenders.
 
+### Hot-patching a deployed install for debug iteration
+
+When the only reproduction is the user's mobile against their real VM, patch files in place rather than cutting a release per iteration:
+
+```bash
+# Local: typecheck first if you touched TS
+npm run typecheck
+
+scp packages/server/dist/server.js root@<vm>:/opt/spannora/dist/server.js
+scp packages/server/public/{app.js,sw.js} root@<vm>:/opt/spannora/public/
+scp packages/shared/src/sse.js root@<vm>:/opt/spannora/public/shared/sse.js
+ssh root@<vm> 'systemctl restart spannora && journalctl -u spannora -f'
+```
+
+`log.info` calls added for diagnosis can stay in if they're per-request (subscriber attach/drop/reattach) rather than per-frame — the v0.6.2 broker logs are an example of this.
+
+**Re-running `install.sh` afterwards overwrites hot-patches** (the installer extracts the latest tagged tarball wholesale). Either cut a new release before the user re-runs, or warn them. The release flow above is the way to make hot-patches durable.
+
 ## Deployment topology
 
 The installer drops everything at:
@@ -213,6 +231,7 @@ settings     keyPath="key"
 ## PWA gotchas
 
 - The service workers (`packages/server/public/sw.js` and `packages/hub/sw.js`) each have a `VERSION` constant — bump it on cache-strategy or precache-list changes so existing installs purge old caches via the activate handler. Cache name is namespaced per app (`spannora-v*` and `spannora-hub-v*`) so installed hub + installed per-server PWAs don't collide.
+- **Mobile installed PWAs are sticky on SW updates.** Bumping `VERSION` and pushing isn't enough — installed PWAs can keep serving old cached JS for a long time. When a tester says "I don't see the fix": first rule out the deploy via `curl https://<host>/<path>/<file>.js | grep -c <new-symbol>`. If the file is fresh, the failure is client-side cache. Unstick options, easiest first: open the same URL in a regular browser tab (no PWA shell, no SW); fully close+reopen the PWA; Android "Clear cache" in app info (not "Clear data" — that logs them out); uninstall+reinstall the PWA.
 - **Never precache auth-gated paths** (`/app.js`, `/login.js`, etc.). If the SW installs before login, the precache fetch follows a 302 → /login and stores login HTML under the asset's cache key, breaking the next authed visit. v0.3.0 had this bug; v0.3.1 fixed it. The hub doesn't have this problem (everything it serves is static and public), but the same `isCacheable()` guard is still there.
 - `isCacheable()` in both SWs rejects redirected responses, non-200s, and responses whose `resp.url !== req.url`.
 - API paths (`/api/*`) are never intercepted by the SW — chat streaming, auth, and conversation state must always hit live.
@@ -295,9 +314,18 @@ All 7 phases done.
 7. Operational polish (stop button, ctx%, JSON logs, retention) — v0.2.0
 8. PWA install — v0.3.0, fixes in v0.3.1
 
-**v0.5.0** adds the monorepo, `@spannora/shared`, token auth + CORS on the server, and the standalone hub PWA — all additive (existing installs are unaffected without `SPANNORA_ALLOWED_ORIGINS`).
+**v0.5.0** — monorepo, `@spannora/shared`, token auth + CORS, standalone hub PWA. All additive (existing installs unaffected without `SPANNORA_ALLOWED_ORIGINS`).
 
-**Post-v0.5.0** (current `main`, not yet release-tagged): added `packages/site` — the Astro static marketing + docs site at `spannora.dev`. Hub PWA moved from `/spannora/` → `/app/` on the same Pages deployment. Hub `manifest.webmanifest` gains `id: "spannora-hub"` so future origin moves don't fragment PWA install identity. Pages workflow rewritten as `deploy-pages.yml` (triggers on every push to main, decoupled from `v*` tags). Server-side installs are unaffected.
+**v0.6.0** — `packages/site` Astro marketing/docs at `spannora.dev`. Hub moved to `/app/` on the same Pages deploy; manifest gains `id: "spannora-hub"`. Pages workflow `deploy-pages.yml` triggers on every push to main. **Also introduces the SSE broker:** `activeQueries` keeps the SDK alive across HTTP disconnects, `GET /api/chat/:id/stream?since=N` replays buffered events past a cursor.
+
+**v0.6.1** — installer hardening: `npm rebuild better-sqlite3` on every run (fixes ABI drift when `command -v node` swaps between apt-Node and nvm-Node across installer runs), `NODE_BIN` pinning across `npm install` / `npm rebuild` / smoke-test / systemd unit, and `(cd $INSTALL_DIR && ...)` wrap on the require-smoke-test so it doesn't fail from a non-spannora cwd. Three-way contract on `SPANNORA_ALLOWED_ORIGINS` (set/empty/unset — see CORS section).
+
+**v0.6.2** (current) — closes out the mobile-reconnect work the v0.6.0 broker pattern set up. Three pieces:
+- **Client `streamPhase` guard.** Mobile browsers can fire `visibilitychange` more than once on a foreground transition; without the guard, a duplicate event during the reattach fetch was aborting the fresh `AbortController` and surfacing "Reconnect failed: signal is aborted without reason." The handler only aborts in `streamPhase === "streaming"` (active SSE read), never during reattach setup.
+- **Cold-reopen resume.** `openConversation` now calls `attemptResume(messages)` which probes `streamReattach` with `since = max(message.seq)`. Live turn → stream continues; ended turn → server's immediate `event: end` makes it a silent no-op (no UI flicker on cold opens of completed convs).
+- **New SSE frame: `event: open`.** Server emits it on subscriber attach when the broker is alive (never when missing/ended) so the client flips the UI to "Stop" the instant attach succeeds — without waiting for the next message frame. Critical for turns that pause mid-stream (tool calls, thinking).
+
+The reconnect loop is now a shared `runStreamLoop(initialRes, onActive)` helper consumed by both `send()` and `attemptResume()`. Per-request broker logging (`sse subscriber attached / dropped / stream reattach request`, info level) is deliberately kept in — it was the diagnostic that pinpointed the visibilitychange race.
 
 **Out of scope per the original plan:** file upload/download, multi-user accounts, cross-host session adapters (the hub registers per-instance — it does not federate or proxy), built-in TLS, mobile-first UI polish (responsive is enough).
 
